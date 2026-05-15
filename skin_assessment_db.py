@@ -6,14 +6,14 @@
 共享基线表: skin_baseline（所有设备，按 device_sn 区分）
 
 五个场景，8 个设备（与 imu_raw_db.py 一一对应）:
-  A : DEV_A_NORMAL    — 完全正常
-  B : DEV_B_SICK      — 短期皮肤病后康复
-  C : DEV_C_SEASON    — 季节性正常升高（温度修正后不误报）
-  D : DEV_D_ALLERGY   — 持续缓慢升高（基线跟上后不误报）
-  E1: DEV_E1_UNWORN   — 忘记佩戴（3天缺口）
-  E2: DEV_E2_BATTERY  — 没电（5天缺口）+ 缺口后皮肤病
-  E3: DEV_E3_SIGNAL   — 信号不稳定（断续丢失）
-  E4: DEV_E4_LOOSE    — 项圈松动（8天无效数据）
+  A : device_sn_1    — 完全正常
+  B : device_sn_2      — 短期皮肤病后康复
+  C : device_sn_3    — 季节性正常升高（温度修正后不误报）
+  D : device_sn_4   — 持续缓慢升高（基线跟上后不误报）
+  E1: device_sn_5   — 忘记佩戴（3天缺口）
+  E2: device_sn_6  — 没电（5天缺口）+ 缺口后皮肤病
+  E3: device_sn_7   — 信号不稳定（断续丢失）
+  E4: device_sn_8    — 项圈松动（8天无效数据）
 
 评估算法与 demo_all.py 完全一致:
   - 热身期 3 天：只收集，不评估，不推送
@@ -90,56 +90,56 @@ np.random.seed(42)
 # ══════════════════════════════════════════════════════
 SCENARIOS = [
     {
-        'sn':     'DEV_A_NORMAL',
+        'sn':     'device_sn_1',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'DEV_B_SICK',
+        'sn':     'device_sn_2',
         'phases': [(0, 60, 10.0, 2.0), (60, 80, 22.0, 3.0), (80, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (60, 80),
     },
     {
-        'sn':     'DEV_C_SEASON',
+        'sn':     'device_sn_3',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.25,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'DEV_D_ALLERGY',
+        'sn':     'device_sn_4',
         'phases': [(0, 60, 10.0, 2.0), (60, 120, 13.0, 2.0), (120, 180, 15.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'DEV_E1_UNWORN',
+        'sn':     'device_sn_5',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(35, 38, 'unworn')],
         'sick':   None,
     },
     {
-        'sn':     'DEV_E2_BATTERY',
+        'sn':     'device_sn_6',
         'phases': [(0, 60, 10.0, 2.0), (60, 73, 22.0, 3.0), (73, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(40, 45, 'battery')],
         'sick':   (60, 73),
     },
     {
-        'sn':     'DEV_E3_SIGNAL',
+        'sn':     'device_sn_7',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)],
         'sick':   None,
     },
     {
-        'sn':     'DEV_E4_LOOSE',
+        'sn':     'device_sn_8',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(50, 58, 'loose')],

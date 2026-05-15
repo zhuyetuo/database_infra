@@ -62,19 +62,19 @@ BEH_LABELS = {1: '运动', 2: '睡眠', 3: '抓挠'}
 PHASE_LABELS = {0: '热身期', 1: '早期(4-14天)', 2: '过渡期(15-30天)', 3: '稳定期(31天+)'}
 
 DEV_META = [
-    ('DEV_A_NORMAL',   '场景A  完全正常',             '#2ECC71'),
-    ('DEV_B_SICK',     '场景B  皮肤病后康复',           '#E74C3C'),
-    ('DEV_C_SEASON',   '场景C  季节性升高',             '#F39C12'),
-    ('DEV_D_ALLERGY',  '场景D  缓慢升高(过敏)',          '#9B59B6'),
-    ('DEV_E1_UNWORN',  '场景E1 忘记佩戴',              '#1ABC9C'),
-    ('DEV_E2_BATTERY', '场景E2 没电+缺口后皮肤病',      '#E67E22'),
-    ('DEV_E3_SIGNAL',  '场景E3 信号断续',              '#3498DB'),
-    ('DEV_E4_LOOSE',   '场景E4 松动无效',              '#7F8C8D'),
+    ('device_sn_1',   '场景A  完全正常',             '#2ECC71'),
+    ('device_sn_2',     '场景B  皮肤病后康复',           '#E74C3C'),
+    ('device_sn_3',   '场景C  季节性升高',             '#F39C12'),
+    ('device_sn_4',  '场景D  缓慢升高(过敏)',          '#9B59B6'),
+    ('device_sn_5',  '场景E1 忘记佩戴',              '#1ABC9C'),
+    ('device_sn_6', '场景E2 没电+缺口后皮肤病',      '#E67E22'),
+    ('device_sn_7',  '场景E3 信号断续',              '#3498DB'),
+    ('device_sn_8',   '场景E4 松动无效',              '#7F8C8D'),
 ]
 SN_COLOR  = {sn: c for sn, _, c in DEV_META}
 SN_LABEL  = {sn: lb for sn, lb, _ in DEV_META}
 
-KEY_SNS = ['DEV_A_NORMAL', 'DEV_B_SICK', 'DEV_D_ALLERGY', 'DEV_E2_BATTERY']
+KEY_SNS = ['device_sn_1', 'device_sn_2', 'device_sn_4', 'device_sn_6']
 
 # ── 全局时间序列（复现 demo_all.py 及入库脚本的随机种子）──
 np.random.seed(42)
@@ -97,14 +97,14 @@ while _i < 80:
 np.random.seed(42)
 
 SCENARIOS = [
-    {'sn': 'DEV_A_NORMAL',   'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [],                                        'sick': None},
-    {'sn': 'DEV_B_SICK',     'phases': [(0,60,10,2),(60,80,22,3),(80,180,10,2)],    'tc': 0.10, 'gaps': [],                                        'sick': (60,80)},
-    {'sn': 'DEV_C_SEASON',   'phases': [(0,180,10,2)],                              'tc': 0.25, 'gaps': [],                                        'sick': None},
-    {'sn': 'DEV_D_ALLERGY',  'phases': [(0,60,10,2),(60,120,13,2),(120,180,15,2)],  'tc': 0.10, 'gaps': [],                                        'sick': None},
-    {'sn': 'DEV_E1_UNWORN',  'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(35,38,'unworn')],                        'sick': None},
-    {'sn': 'DEV_E2_BATTERY', 'phases': [(0,60,10,2),(60,73,22,3),(73,180,10,2)],   'tc': 0.10, 'gaps': [(40,45,'battery')],                       'sick': (60,73)},
-    {'sn': 'DEV_E3_SIGNAL',  'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(d,d+1,'signal') for d in sorted(_SIG_GAPS)], 'sick': None},
-    {'sn': 'DEV_E4_LOOSE',   'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(50,58,'loose')],                         'sick': None},
+    {'sn': 'device_sn_1',   'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_2',     'phases': [(0,60,10,2),(60,80,22,3),(80,180,10,2)],    'tc': 0.10, 'gaps': [],                                        'sick': (60,80)},
+    {'sn': 'device_sn_3',   'phases': [(0,180,10,2)],                              'tc': 0.25, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_4',  'phases': [(0,60,10,2),(60,120,13,2),(120,180,15,2)],  'tc': 0.10, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_5',  'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(35,38,'unworn')],                        'sick': None},
+    {'sn': 'device_sn_6', 'phases': [(0,60,10,2),(60,73,22,3),(73,180,10,2)],   'tc': 0.10, 'gaps': [(40,45,'battery')],                       'sick': (60,73)},
+    {'sn': 'device_sn_7',  'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(d,d+1,'signal') for d in sorted(_SIG_GAPS)], 'sick': None},
+    {'sn': 'device_sn_8',   'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(50,58,'loose')],                         'sick': None},
 ]
 SC_MAP = {s['sn']: s for s in SCENARIOS}
 
@@ -468,7 +468,7 @@ def _gap_bg(ax_obj, df):
 #  图 01 — IMU 6轴数据
 # ══════════════════════════════════════════════════════
 def fig_imu():
-    sn  = 'DEV_B_SICK'
+    sn  = 'device_sn_2'
     imu = get_imu(sn)
     if imu.empty:
         print('  [01] IMU 数据为空，跳过'); return
@@ -787,7 +787,7 @@ def fig_baseline():
 #  图 05 — 脖子温度估算
 # ══════════════════════════════════════════════════════
 def fig_neck_temp():
-    show_sns = ['DEV_A_NORMAL', 'DEV_B_SICK', 'DEV_D_ALLERGY']
+    show_sns = ['device_sn_1', 'device_sn_2', 'device_sn_4']
     np.random.seed(99)
 
     fig, axes = plt.subplots(3, 1, figsize=(20, 14), sharex=True)
@@ -900,8 +900,8 @@ def fig_env():
 
     # 散点：温度 vs 抓挠次数
     for ax_sc, sn, title in [
-        (ax_sc_a, 'DEV_A_NORMAL',  '场景A（正常）  温度系数≈0.10'),
-        (ax_sc_b, 'DEV_C_SEASON',  '场景C（季节性）温度系数≈0.25'),
+        (ax_sc_a, 'device_sn_1',  '场景A（正常）  温度系数≈0.10'),
+        (ax_sc_b, 'device_sn_3',  '场景C（季节性）温度系数≈0.25'),
     ]:
         df   = get_skin(sn)
         ok   = df[(df['data_quality']==0) & (df['in_warmup_flag']==0)]
