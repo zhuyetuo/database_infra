@@ -145,8 +145,8 @@ def to_ts(d: date) -> int:
 
 
 def tbl(sn: str) -> str:
-    """device_sn → 表名"""
-    return f"imu_raw_{sn.lower()}"
+    """device_sn → 表名（直接用 device_sn 小写）"""
+    return sn.lower()
 
 
 def scratch_count_for_day(day_idx: int, phases: list, temp: float, tc: float) -> int:

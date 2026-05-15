@@ -224,7 +224,8 @@ def now_ts() -> int:
 
 
 def tbl_daily(sn: str) -> str:
-    return f"skin_daily_{sn.lower()}"
+    """device_sn → 表名（直接用 device_sn 小写）"""
+    return sn.lower()
 
 
 # ══════════════════════════════════════════════════════

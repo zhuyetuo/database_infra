@@ -375,7 +375,7 @@ _imu_cache:  dict = {}
 def get_skin(sn: str) -> pd.DataFrame:
     if sn not in _skin_cache:
         if _DB_AVAILABLE:
-            t   = f'skin_daily_{sn.lower()}'
+            t   = sn.lower()
             sql = f'''SELECT FROM_UNIXTIME(stat_date_ts/1000) AS date,
                         scratch_count, avg_temperature, avg_humidity,
                         baseline_mean, baseline_std, temp_coef, temp_effect,
@@ -395,7 +395,7 @@ def get_skin(sn: str) -> pd.DataFrame:
 def get_imu(sn: str) -> pd.DataFrame:
     if sn not in _imu_cache:
         if _DB_AVAILABLE:
-            t   = f'imu_raw_{sn.lower()}'
+            t   = sn.lower()
             sql = f'''SELECT DATE(FROM_UNIXTIME(ts_start/1000)) AS date, behavior,
                         AVG(ax) ax_mean, AVG(ay) ay_mean, AVG(az) az_mean,
                         AVG(gx) gx_mean, AVG(gy) gy_mean, AVG(gz) gz_mean,
