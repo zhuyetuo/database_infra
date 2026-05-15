@@ -111,8 +111,8 @@ SC_MAP = {s['sn']: s for s in SCENARIOS}
 # ══════════════════════════════════════════════════════
 #  数据库连接（可选）
 # ══════════════════════════════════════════════════════
-IMU_DB  = 'pet_imu'
-SKIN_DB = 'pet_skin_health'
+IMU_DB  = 'pet_dog_imu'
+SKIN_DB = 'pet_dog_skin'
 _DB_AVAILABLE = False
 
 try:

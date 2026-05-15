@@ -1,8 +1,8 @@
 """
 皮肤健康评估数据库
 =====================
-数据库: pet_skin_health
-每个设备独立一张每日评估表: skin_daily_{device_sn}
+数据库: pet_dog_skin
+每个设备独立一张每日评估表: {device_sn}
 共享基线表: skin_baseline（所有设备，按 device_sn 区分）
 
 五个场景，8 个设备（与 imu_raw_db.py 一一对应）:
@@ -36,7 +36,7 @@ DB_HOST     = "127.0.0.1"
 DB_PORT     = 3306
 DB_USER     = "root"
 DB_PASSWORD = "123456"
-SKIN_DB     = "pet_skin_health"
+SKIN_DB     = "pet_dog_skin"
 
 DAYS       = 180
 WARMUP     = 3

@@ -1,8 +1,8 @@
 """
 IMU 原始数据库
 =====================
-数据库: pet_imu
-每个设备独立一张表: imu_raw_{device_sn}
+数据库: pet_dog_imu
+每个设备独立一张表: {device_sn}
 
 五个场景，8 个设备:
   A : DEV_A_NORMAL    — 完全正常
@@ -37,7 +37,7 @@ DB_HOST     = "127.0.0.1"
 DB_PORT     = 3306
 DB_USER     = "root"
 DB_PASSWORD = "123456"
-IMU_DB      = "pet_imu"
+IMU_DB      = "pet_dog_imu"
 
 DAYS       = 180
 WARMUP     = 3

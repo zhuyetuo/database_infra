@@ -12,8 +12,8 @@ mysql_infra/
 ├── .env                    # 环境变量（密码、默认库名）
 ├── mysql-data/             # 数据持久化目录（自动创建）
 ├── mysql-init/             # 初始化 SQL 脚本目录（可选）
-├── imu_raw_db.py           # 创建 pet_imu 库 + 生成 IMU 原始数据
-├── skin_assessment_db.py   # 创建 pet_skin_health 库 + 生成健康评估数据
+├── imu_raw_db.py           # 创建 pet_dog_imu 库 + 生成 IMU 原始数据
+├── skin_assessment_db.py   # 创建 pet_dog_skin 库 + 生成健康评估数据
 ├── visualize_db.py         # 从数据库读取数据，生成 6 张可视化图表
 ├── charts/                 # 可视化输出图片
 └── ...                     # 旧版单表脚本（skin_health_db.py 等）
@@ -39,8 +39,8 @@ docker ps
 ### 2. 写入模拟数据
 
 ```bash
-python imu_raw_db.py           # 写入 pet_imu（IMU 原始事件数据）
-python skin_assessment_db.py   # 写入 pet_skin_health（健康评估 + 基线）
+python imu_raw_db.py           # 写入 pet_dog_imu（IMU 原始事件数据）
+python skin_assessment_db.py   # 写入 pet_dog_skin（健康评估 + 基线）
 ```
 
 ### 3. 生成可视化图表
@@ -74,9 +74,8 @@ python visualize_db.py          # 图表输出到 ./charts/
 docker exec -it local-mysql8 mysql -uroot -p123456
 
 # 删除整个数据库（在 MySQL 内执行）
-DROP DATABASE pet_imu;
-DROP DATABASE pet_skin_health;
-DROP DATABASE pet_device;
+DROP DATABASE pet_dog_imu;
+DROP DATABASE pet_dog_skin;
 exit
 ```
 
@@ -99,7 +98,7 @@ docker-compose up -d         # 重新启动（全新状态）
 
 ## 数据库说明
 
-### `pet_imu` — IMU 原始数据库
+### `pet_dog_imu` — IMU 原始数据库
 
 每个设备一张表 `imu_raw_{device_sn}`，记录行为事件级 IMU 特征：
 
@@ -112,7 +111,7 @@ docker-compose up -d         # 重新启动（全新状态）
 | `az_rms` | 垂直加速度 RMS（活动强度） |
 | `scratch_hz` | 抓挠主频 Hz（仅抓挠事件） |
 
-### `pet_skin_health` — 皮肤健康评估库
+### `pet_dog_skin` — 皮肤健康评估库
 
 - `skin_daily_{device_sn}`：每日评估结果（z-score、基线、报警等）
 - `skin_baseline`：各设备个体基线汇总
