@@ -569,10 +569,10 @@ def upsert_baseline(conn, sn: str, daily_rows: list):
     # daily_rows 列索引:
     #   0=stat_date_ts, 1=scratch_count, 8=baseline_mean, 9=baseline_std,
     #   10=temp_coef, 19=valid_days, 22=alert_reason, 23=data_quality,
-    #   26=in_warmup_flag, 27=in_gap_flag, 28=just_resumed_flag
-    WARMUP_IDX   = 26
-    GAP_IDX      = 27
-    RESUMED_IDX  = 28
+    #   25=in_warmup_flag, 26=in_gap_flag, 27=just_resumed_flag
+    WARMUP_IDX   = 25
+    GAP_IDX      = 26
+    RESUMED_IDX  = 27
     DQ_IDX       = 23
     COUNT_IDX    = 1
     TEMP_IDX     = 6

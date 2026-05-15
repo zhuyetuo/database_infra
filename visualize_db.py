@@ -380,6 +380,7 @@ def get_skin(sn: str) -> pd.DataFrame:
                         scratch_count, avg_temperature, avg_humidity,
                         baseline_mean, baseline_std, temp_coef, temp_effect,
                         zscore, avg_zscore, consec_abnormal, eval_phase,
+                        threshold_z, threshold_consec, threshold_avgz,
                         valid_days, is_abnormal, alert_triggered, alert_reason,
                         data_quality, in_warmup_flag, in_gap_flag, just_resumed_flag
                       FROM `{t}` ORDER BY stat_date_ts'''

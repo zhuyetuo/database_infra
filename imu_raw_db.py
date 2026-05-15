@@ -421,7 +421,7 @@ def query_summary():
             """)
             row = cursor.fetchone()
             print(f"  {sc['sn']:20s}  "
-                  f"总={row[0]:5d}  运动={row[1]:4d}  睡眠={row[2]:4d}  抓挠={row[3]:4d}  "
+                  f"总={int(row[0]):5d}  运动={int(row[1]):4d}  睡眠={int(row[2]):4d}  抓挠={int(row[3]):4d}  "
                   f"抓挠均时长={row[4]}s  均频={row[5]}Hz  az_rms={row[6]}")
         except Exception as e:
             print(f"  {sc['sn']}: 查询失败 {e}")
