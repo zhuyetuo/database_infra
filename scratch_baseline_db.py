@@ -1,18 +1,16 @@
 """
-皮肤健康评估数据库
+抓挠基线数据库
 =====================
-数据库: pet_dog_skin_assessment
-每个设备独立一张每日评估表: {device_sn}
+数据库: pet_dog_scratch_baseline
+每个设备独立一张表: {device_sn}
 
-24 个场景设备（与 imu_raw_db.py 一一对应）
-
-评估算法:
-  - 热身期（默认3天，device_sn_21 为7天）：只收集，不评估
-  - 个体动态基线：异常天权重 0.01，正常天权重 0.05
-  - 标准差保底 2.0
-  - 温度修正：20 天数据后启用，系数上限 0.4
-  - 动态阈值：早期 z>4.0 连续5天，过渡期 z>3.5 连续4天，稳定期 z>2.5 连续3天
-  - 缺口处理：基线冻结 → 恢复后缓冲天（data_quality=5）→ 缺口≥30天重置门槛
+每行 = 当天算法运行后的基线快照
+  stat_date      统计日期
+  baseline_mean  基线均值 次/天
+  baseline_std   基线标准差
+  temp_coef      温度修正系数 次/°C
+  confidence     基线置信度 0.00-1.00
+  valid_days     参与计算的有效正常天数
 """
 
 import mysql.connector
@@ -27,7 +25,7 @@ DB_HOST     = "127.0.0.1"
 DB_PORT     = 3306
 DB_USER     = "root"
 DB_PASSWORD = "123456"
-SKIN_DB     = "pet_dog_skin_assessment"
+BSL_DB      = "pet_dog_scratch_baseline"
 
 DAYS       = 180
 WARMUP     = 3
@@ -262,7 +260,7 @@ SCENARIOS = [
 
 
 # ══════════════════════════════════════════════════════
-#  算法函数
+#  算法函数（与 skin_assessment_db.py 一致）
 # ══════════════════════════════════════════════════════
 
 def get_thresholds(valid_days: int):
@@ -270,13 +268,6 @@ def get_thresholds(valid_days: int):
     elif valid_days <= 11:  return 4.0, 5, 5.0
     elif valid_days <= 27:  return 3.5, 4, 4.5
     else:                   return 2.5, 3, 3.5
-
-
-def get_phase(valid_days: int) -> int:
-    if valid_days == 0:     return 0
-    elif valid_days <= 11:  return 1
-    elif valid_days <= 27:  return 2
-    else:                   return 3
 
 
 def estimate_temp_coef(buf_c: list, buf_t: list) -> float:
@@ -307,14 +298,6 @@ def is_sick_day(day_idx: int, sc: dict) -> bool:
     return False
 
 
-def safe(v):
-    if v is None:
-        return None
-    if isinstance(v, float) and math.isnan(v):
-        return None
-    return v
-
-
 def build_gap_map(gaps: list) -> dict:
     gm = {}
     for start, end, reason in gaps:
@@ -327,19 +310,15 @@ def to_date(d: date) -> str:
     return d.strftime('%Y-%m-%d')
 
 
-def to_ts(d: date) -> int:
-    return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp() * 1000)
-
-
 def tbl(sn: str) -> str:
     return sn.lower()
 
 
 # ══════════════════════════════════════════════════════
-#  核心：运行评估算法，构建每日行记录
+#  核心：运行基线算法，构建每日快照记录
 # ══════════════════════════════════════════════════════
 
-def build_daily_rows(sc: dict, seed: int = 42) -> list:
+def build_baseline_rows(sc: dict, seed: int = 42) -> list:
     np.random.seed(seed)
 
     phases    = sc['phases']
@@ -356,36 +335,19 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
     gap_counter = 0
     in_gap      = False
     just_resumed = False
-    recent_z_buf = []
 
     rows = []
 
     for i in range(DAYS):
-        d    = START_DATE + timedelta(days=i)
+        d         = START_DATE + timedelta(days=i)
         stat_date = to_date(d)
-        temp = round(float(_temperature[i]), 1)
-        sick = is_sick_day(i, sc)
-        wear = int(np.random.uniform(1350, 1440))
+        temp      = round(float(_temperature[i]), 1)
 
-        # ── 缺口天 ───────────────────────────────────────────
+        # ── 缺口天：基线冻结，不保存快照 ─────────────────────
         if i in gap_map:
-            gap_reason = gap_map[i]
-            dq         = GAP_REASON_TO_DQ.get(gap_reason, DATA_QUALITY_UNWORN)
             gap_counter += 1
             in_gap       = True
             consec       = 0
-
-            rows.append((
-                stat_date,
-                0,
-                safe(mean), safe(std),
-                None, None,
-                0,
-                get_phase(valid_days),
-                None, None,
-                0, 0, None,
-                dq, 0,
-            ))
             continue
 
         # ── 恢复佩戴 ─────────────────────────────────────────
@@ -405,17 +367,6 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
         if i < warmup:
             buf_c.append(count)
             buf_t.append(temp)
-            rows.append((
-                stat_date,
-                count,
-                None, None,
-                None, None,
-                0,
-                0,
-                None, None,
-                0, 0, None,
-                DATA_QUALITY_NORMAL, wear,
-            ))
             continue
 
         # ── 初始化基线 ────────────────────────────────────────
@@ -424,30 +375,29 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
             std  = max(float(np.std(buf_c)) if len(buf_c) > 1 else MIN_STD, MIN_STD)
 
         valid_days += 1
-        tz, tc, ta  = get_thresholds(valid_days)
+        tz, tc, ta = get_thresholds(valid_days)
 
-        # ── 缓冲天（恢复佩戴后第一天） ───────────────────────
+        # ── 缓冲天 ────────────────────────────────────────────
         if just_resumed:
             mean = mean * (1 - NORMAL_W) + count * NORMAL_W
             buf_c.append(count)
             buf_t.append(temp)
+            coef       = estimate_temp_coef(buf_c, buf_t)
+            confidence = round(min(1.0, valid_days / 30), 2)
             rows.append((
                 stat_date,
-                count,
-                round(mean, 2), round(std, 2),
-                None, None,
-                0,
-                get_phase(valid_days),
-                safe(tz), safe(tc),
-                0, 0, None,
-                DATA_QUALITY_BUFFER, wear,
+                round(mean, 2),
+                round(std, 2),
+                coef,
+                confidence,
+                valid_days,
             ))
             continue
 
         # ── 正常评估 ──────────────────────────────────────────
-        coef        = estimate_temp_coef(buf_c, buf_t)
-        zscore      = round(((count - mean) - coef * (temp - 20)) / std, 2)
-        is_abn      = bool(zscore > tz) if tz is not None else False
+        coef   = estimate_temp_coef(buf_c, buf_t)
+        zscore = ((count - mean) - coef * (temp - 20)) / std
+        is_abn = bool(zscore > tz) if tz is not None else False
 
         if is_abn:
             consec += 1
@@ -461,28 +411,14 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
         if len(buf_c) > 1:
             std = max(float(np.std(buf_c[-30:])), MIN_STD)
 
-        n_back   = max((tc - 1) if tc else 2, 1)
-        z_window = [z for z in recent_z_buf[-n_back:]] + [zscore]
-        avg_z    = round(float(np.mean(z_window)), 2)
-
-        recent_z_buf.append(zscore)
-        if len(recent_z_buf) > 10:
-            recent_z_buf.pop(0)
-
-        alert  = bool((tc is not None) and (consec >= tc) and (avg_z >= ta))
-        reason = (f'连续{consec}天z>{tz:.1f}，均值z={avg_z:.2f}，抓挠{count}次'
-                  if alert else None)
-
+        confidence = round(min(1.0, valid_days / 30), 2)
         rows.append((
             stat_date,
-            count,
-            round(mean, 2), round(std, 2),
-            zscore, avg_z,
-            consec,
-            get_phase(valid_days),
-            safe(tz), safe(tc),
-            int(is_abn), int(alert), reason,
-            DATA_QUALITY_NORMAL, wear,
+            round(mean, 2),
+            round(std, 2),
+            coef,
+            confidence,
+            valid_days,
         ))
 
     return rows
@@ -502,12 +438,12 @@ def get_conn(database: str = None):
 def create_database():
     conn   = get_conn()
     cursor = conn.cursor()
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{SKIN_DB}` "
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{BSL_DB}` "
                    f"DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
     conn.commit()
     cursor.close()
     conn.close()
-    print(f"[OK] 数据库 {SKIN_DB} 已就绪")
+    print(f"[OK] 数据库 {BSL_DB} 已就绪")
 
 
 def create_table(conn, sn: str):
@@ -515,42 +451,21 @@ def create_table(conn, sn: str):
     cursor = conn.cursor()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS `{t}` (
-          `stat_date`        date          NOT NULL
-                             COMMENT '统计日期',
-          `scratch_count`    int           NOT NULL DEFAULT 0
-                             COMMENT '当日抓挠总次数',
-          `baseline_mean`    decimal(6,2)  DEFAULT NULL
-                             COMMENT '个体基线均值 次/天',
-          `baseline_std`     decimal(6,2)  DEFAULT NULL
-                             COMMENT '个体基线标准差',
-          `zscore`           decimal(6,2)  DEFAULT NULL
-                             COMMENT '温度修正后 z-score',
-          `avg_zscore`       decimal(6,2)  DEFAULT NULL
-                             COMMENT '近N天均值 z-score',
-          `consec_abnormal`  int           NOT NULL DEFAULT 0
-                             COMMENT '当前连续异常天数',
-          `eval_phase`       tinyint       NOT NULL DEFAULT 0
-                             COMMENT '评估阶段(0:热身期 1:早期 2:过渡期 3:稳定期)',
-          `threshold_z`      decimal(4,2)  DEFAULT NULL
-                             COMMENT '当日 z-score 门槛',
-          `threshold_consec` tinyint       DEFAULT NULL
-                             COMMENT '当日连续天数门槛',
-          `is_abnormal`      tinyint(1)    NOT NULL DEFAULT 0
-                             COMMENT '当日是否异常(0=正常 1=异常)',
-          `alert_triggered`  tinyint(1)    NOT NULL DEFAULT 0
-                             COMMENT '是否触发报警(0=无 1=报警)',
-          `alert_reason`     varchar(256)  DEFAULT NULL
-                             COMMENT '报警原因描述',
-          `data_quality`     tinyint       NOT NULL DEFAULT 0
-                             COMMENT '数据质量(0=正常 1=未佩戴 2=没电 3=信号丢失 4=松动 5=缓冲天)',
-          `wear_minutes`     int           NOT NULL DEFAULT 0
-                             COMMENT '有效佩戴分钟数',
-          PRIMARY KEY (`stat_date`),
-          KEY `idx_abnormal` (`is_abnormal`,    `stat_date`),
-          KEY `idx_alert`    (`alert_triggered`, `stat_date`),
-          KEY `idx_quality`  (`data_quality`,    `stat_date`)
+          `stat_date`     date          NOT NULL
+                          COMMENT '统计日期',
+          `baseline_mean` decimal(6,2)  NOT NULL
+                          COMMENT '基线均值 次/天',
+          `baseline_std`  decimal(6,2)  NOT NULL
+                          COMMENT '基线标准差',
+          `temp_coef`     decimal(5,3)  NOT NULL DEFAULT 0.000
+                          COMMENT '温度修正系数 次/°C',
+          `confidence`    decimal(4,2)  NOT NULL DEFAULT 0.00
+                          COMMENT '基线置信度 0.00-1.00',
+          `valid_days`    int           NOT NULL DEFAULT 0
+                          COMMENT '参与计算的有效正常天数',
+          PRIMARY KEY (`stat_date`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
-          COMMENT='设备 {sn} 皮肤健康每日评估结果（场景模拟）';
+          COMMENT='设备 {sn} 抓挠基线每日快照（场景模拟）';
     """)
     conn.commit()
     cursor.close()
@@ -565,19 +480,14 @@ def insert_rows(conn, sn: str, rows: list):
     t   = tbl(sn)
     sql = f"""
         INSERT IGNORE INTO `{t}`
-          (`stat_date`, `scratch_count`,
-           `baseline_mean`, `baseline_std`,
-           `zscore`, `avg_zscore`,
-           `consec_abnormal`, `eval_phase`,
-           `threshold_z`, `threshold_consec`,
-           `is_abnormal`, `alert_triggered`, `alert_reason`,
-           `data_quality`, `wear_minutes`)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+          (`stat_date`, `baseline_mean`, `baseline_std`,
+           `temp_coef`, `confidence`, `valid_days`)
+        VALUES (%s, %s, %s, %s, %s, %s)
     """
     cursor = conn.cursor()
     cursor.executemany(sql, rows)
     conn.commit()
-    print(f"  [{sn}] 插入 {cursor.rowcount} 条每日评估记录")
+    print(f"  [{sn}] 插入 {cursor.rowcount} 条基线快照记录")
     cursor.close()
 
 
@@ -586,58 +496,32 @@ def insert_rows(conn, sn: str, rows: list):
 # ══════════════════════════════════════════════════════
 
 def query_summary():
-    conn   = get_conn(SKIN_DB)
+    conn   = get_conn(BSL_DB)
     cursor = conn.cursor()
 
-    print("\n======= 各设备每日评估概况 =======")
+    print("\n======= 基线快照概况 =======")
     for sc in SCENARIOS:
         t = tbl(sc['sn'])
         try:
             cursor.execute(f"""
                 SELECT
-                    COUNT(*)                                         AS 总天数,
-                    SUM(data_quality = 0 AND eval_phase = 0)        AS 热身期,
-                    SUM(data_quality IN (1,2,3,4))                  AS 缺口天,
-                    SUM(data_quality = 5)                           AS 缓冲天,
-                    SUM(is_abnormal)                                 AS 异常天,
-                    SUM(alert_triggered)                             AS 推送次数,
-                    ROUND(AVG(CASE WHEN data_quality=0
-                              THEN scratch_count END), 1)           AS 日均抓挠,
-                    ROUND(MAX(zscore), 2)                            AS 最高z_score
+                    COUNT(*)                        AS total,
+                    MAX(valid_days)                 AS max_valid_days,
+                    ROUND(MAX(confidence), 2)       AS max_conf,
+                    ROUND(AVG(baseline_mean), 2)    AS avg_mean,
+                    ROUND(AVG(baseline_std), 2)     AS avg_std,
+                    ROUND(AVG(temp_coef), 3)        AS avg_coef,
+                    MIN(stat_date)                  AS earliest,
+                    MAX(stat_date)                  AS latest
                 FROM `{t}`
             """)
             row = cursor.fetchone()
-            print(f"  {sc['sn']:20s}  "
-                  f"总={row[0]:3d}天  热身={row[1]}  缺口={row[2]}  缓冲={row[3]}  "
-                  f"异常={row[4]}  推送={row[5]}  "
-                  f"日均={row[6]}次  最高z={row[7]}")
+            print(f"  {sc['sn']:20s}  快照={int(row[0]):3d}天  "
+                  f"最终有效天={row[1]}  置信度={row[2]}  "
+                  f"均值={row[3]}  标准差={row[4]}  温度系数={row[5]}  "
+                  f"{row[6]} ~ {row[7]}")
         except Exception as e:
             print(f"  {sc['sn']}: 查询失败 {e}")
-
-    print("\n======= 推送记录明细 =======")
-    found = False
-    for sc in SCENARIOS:
-        t = tbl(sc['sn'])
-        try:
-            cursor.execute(f"""
-                SELECT
-                    stat_date, scratch_count, zscore, avg_zscore,
-                    consec_abnormal, alert_reason
-                FROM `{t}`
-                WHERE alert_triggered = 1
-                ORDER BY stat_date
-            """)
-            alerts = cursor.fetchall()
-            if alerts:
-                found = True
-                for r in alerts:
-                    print(f"  {sc['sn']:20s}  日期={r[0]}  "
-                          f"次数={r[1]}  z={r[2]}  avgz={r[3]}  "
-                          f"连续={r[4]}天  {r[5]}")
-        except Exception:
-            pass
-    if not found:
-        print("  （暂无推送记录）")
 
     cursor.close()
     conn.close()
@@ -651,16 +535,16 @@ def main():
     print("=== 第一步：创建数据库 ===")
     create_database()
 
-    conn = get_conn(SKIN_DB)
+    conn = get_conn(BSL_DB)
 
     print("\n=== 第二步：建表 ===")
     for sc in SCENARIOS:
         create_table(conn, sc['sn'])
 
-    print("\n=== 第三步：生成并插入每日评估数据 ===")
+    print("\n=== 第三步：生成并插入基线快照数据 ===")
     for idx, sc in enumerate(SCENARIOS):
-        rows = build_daily_rows(sc, seed=42 + idx)
-        print(f"  [{sc['sn']}] 生成 {len(rows)} 天数据，开始插入...")
+        rows = build_baseline_rows(sc, seed=42 + idx)
+        print(f"  [{sc['sn']}] 生成 {len(rows)} 条快照，开始插入...")
         insert_rows(conn, sc['sn'], rows)
 
     conn.close()
@@ -668,7 +552,7 @@ def main():
     print("\n=== 第四步：查询验证 ===")
     query_summary()
 
-    print("\n[完成] 皮肤健康评估数据库写入完毕！")
+    print("\n[完成] 抓挠基线数据库写入完毕！")
 
 
 if __name__ == "__main__":

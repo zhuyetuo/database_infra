@@ -62,21 +62,37 @@ BEH_LABELS = {1: '运动', 2: '睡眠', 3: '抓挠'}
 PHASE_LABELS = {0: '热身期', 1: '早期(4-14天)', 2: '过渡期(15-30天)', 3: '稳定期(31天+)'}
 
 DEV_META = [
-    ('device_sn_1',   '场景A  完全正常',             '#2ECC71'),
-    ('device_sn_2',     '场景B  皮肤病后康复',           '#E74C3C'),
-    ('device_sn_3',   '场景C  季节性升高',             '#F39C12'),
-    ('device_sn_4',  '场景D  缓慢升高(过敏)',          '#9B59B6'),
-    ('device_sn_5',  '场景E1 忘记佩戴',              '#1ABC9C'),
-    ('device_sn_6', '场景E2 没电+缺口后皮肤病',      '#E67E22'),
-    ('device_sn_7',  '场景E3 信号断续',              '#3498DB'),
-    ('device_sn_8',   '场景E4 松动无效',              '#7F8C8D'),
+    ('device_sn_1',  '完全正常',                '#2ECC71'),
+    ('device_sn_2',  '急性皮肤病后康复',          '#E74C3C'),
+    ('device_sn_3',  '慢性皮肤病(不恢复)',         '#C0392B'),
+    ('device_sn_4',  '复发(两次发病)',             '#9B59B6'),
+    ('device_sn_5',  '渐进性过敏',               '#8E44AD'),
+    ('device_sn_6',  '食物过敏(突发)',             '#E67E22'),
+    ('device_sn_7',  '跳蚤/螨虫(极高抓挠)',        '#D35400'),
+    ('device_sn_8',  '季节性过敏(高温度系数)',      '#F39C12'),
+    ('device_sn_9',  '术后恢复(低活动)',           '#1ABC9C'),
+    ('device_sn_10', '忘记佩戴(3天缺口)',          '#27AE60'),
+    ('device_sn_11', '电池耗尽(5天缺口)',          '#16A085'),
+    ('device_sn_12', '长期缺口>30天(基线重置)',     '#2980B9'),
+    ('device_sn_13', '信号不稳定(断续丢失)',        '#3498DB'),
+    ('device_sn_14', '松动项圈(8天无效)',          '#7F8C8D'),
+    ('device_sn_15', '设备更换(第90天)',           '#95A5A6'),
+    ('device_sn_16', '传感器漂移(第70-90天)',       '#BDC3C7'),
+    ('device_sn_17', '季节转换(明显温度效应)',       '#F1C40F'),
+    ('device_sn_18', '搬家(环境突变第60天)',        '#E74C3C'),
+    ('device_sn_19', '出行旅游(第80-90天缺口)',     '#2ECC71'),
+    ('device_sn_20', '高湿度环境',                '#1ABC9C'),
+    ('device_sn_21', '幼犬(基线建立慢)',           '#3498DB'),
+    ('device_sn_22', '老年犬(低活动)',             '#9B59B6'),
+    ('device_sn_23', '高活跃度犬',                '#E67E22'),
+    ('device_sn_24', '低活跃度犬(敏感)',           '#BDC3C7'),
 ]
 SN_COLOR  = {sn: c for sn, _, c in DEV_META}
 SN_LABEL  = {sn: lb for sn, lb, _ in DEV_META}
 
 KEY_SNS = ['device_sn_1', 'device_sn_2', 'device_sn_4', 'device_sn_6']
 
-# ── 全局时间序列（复现 demo_all.py 及入库脚本的随机种子）──
+# ── 全局时间序列（复现入库脚本随机种子）──
 np.random.seed(42)
 _TEMP_ARR = (22 + 13 * np.sin(np.linspace(-np.pi/2, 3*np.pi/2, DAYS))
              + np.random.normal(0, 1.5, DAYS))
@@ -97,14 +113,34 @@ while _i < 80:
 np.random.seed(42)
 
 SCENARIOS = [
-    {'sn': 'device_sn_1',   'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [],                                        'sick': None},
-    {'sn': 'device_sn_2',     'phases': [(0,60,10,2),(60,80,22,3),(80,180,10,2)],    'tc': 0.10, 'gaps': [],                                        'sick': (60,80)},
-    {'sn': 'device_sn_3',   'phases': [(0,180,10,2)],                              'tc': 0.25, 'gaps': [],                                        'sick': None},
-    {'sn': 'device_sn_4',  'phases': [(0,60,10,2),(60,120,13,2),(120,180,15,2)],  'tc': 0.10, 'gaps': [],                                        'sick': None},
-    {'sn': 'device_sn_5',  'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(35,38,'unworn')],                        'sick': None},
-    {'sn': 'device_sn_6', 'phases': [(0,60,10,2),(60,73,22,3),(73,180,10,2)],   'tc': 0.10, 'gaps': [(40,45,'battery')],                       'sick': (60,73)},
-    {'sn': 'device_sn_7',  'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(d,d+1,'signal') for d in sorted(_SIG_GAPS)], 'sick': None},
-    {'sn': 'device_sn_8',   'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(50,58,'loose')],                         'sick': None},
+    # 健康场景 1-9
+    {'sn': 'device_sn_1',  'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_2',  'phases': [(0,60,10,2),(60,80,30,4),(80,180,10,2)],    'tc': 0.10, 'gaps': [],                                        'sick': (60,80)},
+    {'sn': 'device_sn_3',  'phases': [(0,60,10,2),(60,180,28,4)],                 'tc': 0.10, 'gaps': [],                                        'sick': (60,180)},
+    {'sn': 'device_sn_4',  'phases': [(0,40,10,2),(40,55,28,4),(55,120,10,2),(120,135,30,4),(135,180,10,2)], 'tc': 0.10, 'gaps': [], 'sick': None, 'sick_episodes': [(40,55),(120,135)]},
+    {'sn': 'device_sn_5',  'phases': [(0,60,10,2),(60,120,15,2),(120,180,22,3)],  'tc': 0.10, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_6',  'phases': [(0,90,10,2),(90,180,25,3)],                 'tc': 0.10, 'gaps': [],                                        'sick': (90,180)},
+    {'sn': 'device_sn_7',  'phases': [(0,50,10,2),(50,80,45,6),(80,180,10,2)],    'tc': 0.10, 'gaps': [],                                        'sick': (50,80)},
+    {'sn': 'device_sn_8',  'phases': [(0,180,10,2)],                              'tc': 0.35, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_9',  'phases': [(0,30,10,2),(30,90,3,1),(90,180,10,2)],     'tc': 0.10, 'gaps': [],                                        'sick': None},
+    # 设备/数据质量场景 10-16
+    {'sn': 'device_sn_10', 'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(35,38,'unworn')],                        'sick': None},
+    {'sn': 'device_sn_11', 'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(40,45,'battery')],                       'sick': None},
+    {'sn': 'device_sn_12', 'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(30,65,'battery')],                       'sick': None},
+    {'sn': 'device_sn_13', 'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(d,d+1,'signal') for d in sorted(_SIG_GAPS)], 'sick': None},
+    {'sn': 'device_sn_14', 'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(50,58,'loose')],                         'sick': None},
+    {'sn': 'device_sn_15', 'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(88,92,'battery')],                       'sick': None},
+    {'sn': 'device_sn_16', 'phases': [(0,70,10,2),(70,90,35,5),(90,180,10,2)],    'tc': 0.10, 'gaps': [],                                        'sick': None},
+    # 环境场景 17-20
+    {'sn': 'device_sn_17', 'phases': [(0,180,10,2)],                              'tc': 0.30, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_18', 'phases': [(0,60,10,2),(60,180,13,2)],                 'tc': 0.15, 'gaps': [],                                        'sick': None, 'temp_shift': (60, 5.0)},
+    {'sn': 'device_sn_19', 'phases': [(0,180,10,2)],                              'tc': 0.10, 'gaps': [(80,90,'unworn')],                        'sick': None},
+    {'sn': 'device_sn_20', 'phases': [(0,180,14,2)],                              'tc': 0.10, 'gaps': [],                                        'sick': None},
+    # 个体类型场景 21-24
+    {'sn': 'device_sn_21', 'phases': [(0,180,15,4)],                              'tc': 0.10, 'gaps': [],                                        'sick': None, 'warmup': 7},
+    {'sn': 'device_sn_22', 'phases': [(0,180,5,1)],                               'tc': 0.05, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_23', 'phases': [(0,180,20,3)],                              'tc': 0.12, 'gaps': [],                                        'sick': None},
+    {'sn': 'device_sn_24', 'phases': [(0,180,4,1)],                               'tc': 0.08, 'gaps': [],                                        'sick': None},
 ]
 SC_MAP = {s['sn']: s for s in SCENARIOS}
 
@@ -112,7 +148,10 @@ SC_MAP = {s['sn']: s for s in SCENARIOS}
 #  数据库连接（可选）
 # ══════════════════════════════════════════════════════
 IMU_DB  = 'pet_dog_imu'
-SKIN_DB = 'pet_dog_skin'
+ENV_DB  = 'pet_dog_environment'
+BEH_DB  = 'pet_dog_behavior'
+SKIN_DB = 'pet_dog_skin_assessment'
+BSL_DB  = 'pet_dog_scratch_baseline'
 _DB_AVAILABLE = False
 
 try:
@@ -121,9 +160,9 @@ try:
                         password='123456', connection_timeout=3)
     _test.close()
     _DB_AVAILABLE = True
-    print('✅ 数据库连接成功，使用数据库数据')
+    print('[OK] 数据库连接成功，使用数据库数据')
 except Exception:
-    print('⚠  数据库不可用，使用内联生成数据（与数据库内容算法一致）')
+    print('[INFO] 数据库不可用，使用内联生成数据（与数据库内容算法一致）')
 
 
 def _db_read(sql: str, db: str) -> pd.DataFrame:
@@ -167,6 +206,15 @@ def _scratch_count(i, phases, temp, tc):
             return max(0, int(np.random.normal(m + tc*(temp-20), sd)))
     return 0
 
+def _is_sick(i, sc):
+    episodes = sc.get('sick_episodes')
+    if episodes:
+        return any(s <= i < e for s, e in episodes)
+    sick = sc.get('sick')
+    if sick:
+        return sick[0] <= i < sick[1]
+    return False
+
 DQ_MAP = {'unworn':1,'battery':2,'signal':3,'loose':4}
 
 # ══════════════════════════════════════════════════════
@@ -174,8 +222,8 @@ DQ_MAP = {'unworn':1,'battery':2,'signal':3,'loose':4}
 # ══════════════════════════════════════════════════════
 def gen_skin_daily(sc: dict, seed: int = 42) -> pd.DataFrame:
     np.random.seed(seed)
-    gap_map = _gap_map(sc['gaps'])
-    sick    = sc.get('sick')
+    gap_map  = _gap_map(sc['gaps'])
+    warmup   = sc.get('warmup', WARMUP)
     mean=std=None; bc=[]; bt=[]; consec=0; vd=0
     gc=0; in_gap=False; resumed=False; zbuf=[]
     rows = []
@@ -184,7 +232,6 @@ def gen_skin_daily(sc: dict, seed: int = 42) -> pd.DataFrame:
         d    = START_DATE + timedelta(days=i)
         temp = round(float(_TEMP_ARR[i]), 1)
         humi = round(float(_HUMI_ARR[i]), 1)
-        is_sick = bool(sick and sick[0] <= i < sick[1])
 
         if i in gap_map:
             dq = DQ_MAP.get(gap_map[i], 1)
@@ -196,7 +243,6 @@ def gen_skin_daily(sc: dict, seed: int = 42) -> pd.DataFrame:
                          'zscore': None, 'avg_zscore': None,
                          'consec_abnormal': 0, 'eval_phase': _phase(vd),
                          'threshold_z': None, 'threshold_consec': None,
-                         'threshold_avgz': None,
                          'valid_days': vd, 'is_abnormal': 0,
                          'alert_triggered': 0, 'alert_reason': None,
                          'data_quality': dq, 'in_warmup_flag': 0,
@@ -210,12 +256,10 @@ def gen_skin_daily(sc: dict, seed: int = 42) -> pd.DataFrame:
         else:
             resumed = False
 
-        cnt = _scratch_count(i, sc['phases'], temp, sc['tc'])
-        avg_dur = max(500, int(np.random.normal(4500 if is_sick else 4000, 800)))
-        night   = max(0, int(cnt * (np.random.uniform(0.2, 0.35) if is_sick
-                                    else np.random.uniform(0.05, 0.15))))
+        cnt  = _scratch_count(i, sc['phases'], temp, sc['tc'])
+        wear = int(np.random.uniform(1350, 1440))
 
-        if i < WARMUP:
+        if i < warmup:
             bc.append(cnt); bt.append(temp)
             rows.append({'date': d, 'scratch_count': cnt,
                          'avg_temperature': temp, 'avg_humidity': humi,
@@ -223,7 +267,7 @@ def gen_skin_daily(sc: dict, seed: int = 42) -> pd.DataFrame:
                          'temp_coef': None, 'temp_effect': None,
                          'zscore': None, 'avg_zscore': None,
                          'consec_abnormal': 0, 'eval_phase': 0,
-                         'threshold_z': None, 'threshold_consec': None, 'threshold_avgz': None,
+                         'threshold_z': None, 'threshold_consec': None,
                          'valid_days': 0, 'is_abnormal': 0,
                          'alert_triggered': 0, 'alert_reason': None,
                          'data_quality': 0, 'in_warmup_flag': 1,
@@ -246,7 +290,7 @@ def gen_skin_daily(sc: dict, seed: int = 42) -> pd.DataFrame:
                          'temp_coef': 0.0, 'temp_effect': 0.0,
                          'zscore': None, 'avg_zscore': None,
                          'consec_abnormal': 0, 'eval_phase': _phase(vd),
-                         'threshold_z': tz, 'threshold_consec': tc, 'threshold_avgz': ta,
+                         'threshold_z': tz, 'threshold_consec': tc,
                          'valid_days': vd, 'is_abnormal': 0,
                          'alert_triggered': 0, 'alert_reason': None,
                          'data_quality': 5, 'in_warmup_flag': 0,
@@ -281,7 +325,7 @@ def gen_skin_daily(sc: dict, seed: int = 42) -> pd.DataFrame:
                      'temp_coef': coef, 'temp_effect': te,
                      'zscore': zs, 'avg_zscore': avgz,
                      'consec_abnormal': consec, 'eval_phase': _phase(vd),
-                     'threshold_z': tz, 'threshold_consec': tc, 'threshold_avgz': ta,
+                     'threshold_z': tz, 'threshold_consec': tc,
                      'valid_days': vd, 'is_abnormal': int(is_abn),
                      'alert_triggered': int(alert), 'alert_reason': reason,
                      'data_quality': 0, 'in_warmup_flag': 0,
@@ -299,39 +343,29 @@ def _imu_feat(btype, si=1.0):
     if btype == 2:  # sleep
         return dict(ax=np.random.normal(0,20), ay=np.random.normal(0,15),
                     az=np.random.normal(980,25), gx=np.random.normal(0,2),
-                    gy=np.random.normal(0,2), gz=np.random.normal(0,1.5),
-                    az_rms=abs(np.random.normal(980,25))+np.random.uniform(5,20),
-                    scratch_hz=None)
+                    gy=np.random.normal(0,2), gz=np.random.normal(0,1.5))
     elif btype == 1:  # move
         return dict(ax=np.random.normal(40,150), ay=np.random.normal(20,120),
                     az=np.random.normal(650,280), gx=np.random.normal(0,90),
-                    gy=np.random.normal(0,70), gz=np.random.normal(0,55),
-                    az_rms=abs(np.random.normal(650,280))+np.random.uniform(80,250),
-                    scratch_hz=None)
+                    gy=np.random.normal(0,70), gz=np.random.normal(0,55))
     else:  # scratch
         return dict(ax=np.random.normal(180*si,80), ay=np.random.normal(40,60),
                     az=np.random.normal(800,180), gx=np.random.normal(0,130*si),
-                    gy=np.random.normal(0,90), gz=np.random.normal(0,70),
-                    az_rms=abs(np.random.normal(800,180))+np.random.uniform(150*si,350*si),
-                    scratch_hz=np.random.uniform(2.0, 5.5))
+                    gy=np.random.normal(0,90), gz=np.random.normal(0,70))
 
 def gen_imu_daily_agg(sc: dict, seed: int = 42) -> pd.DataFrame:
     np.random.seed(seed)
     gap_map = _gap_map(sc['gaps'])
-    sick    = sc.get('sick')
     records = []
 
     for i in range(DAYS):
         if i in gap_map: continue
         temp  = float(_TEMP_ARR[i])
         cnt   = _scratch_count(i, sc['phases'], temp, sc['tc'])
-        si    = 1.8 if (sick and sick[0] <= i < sick[1]) else 1.0
+        si    = 1.8 if _is_sick(i, sc) else 1.0
         d_obj = START_DATE + timedelta(days=i)
 
-        seg_scratch = [cnt//3, cnt - cnt//3]
-        seg_btypes  = [[2,1], [2,1]]  # morning/afternoon background types
-
-        for btype in [1, 2]:  # generate move + sleep events
+        for btype in [1, 2]:
             n_ev = int(np.random.uniform(8, 20))
             evs  = [_imu_feat(btype, si) for _ in range(n_ev)]
             if evs:
@@ -342,11 +376,10 @@ def gen_imu_daily_agg(sc: dict, seed: int = 42) -> pd.DataFrame:
                                 'gx_mean': np.mean([e['gx'] for e in evs]),
                                 'gy_mean': np.mean([e['gy'] for e in evs]),
                                 'gz_mean': np.mean([e['gz'] for e in evs]),
-                                'az_rms_mean': np.mean([e['az_rms'] for e in evs]),
-                                'hz_mean': None, 'event_count': n_ev,
+                                'event_count': n_ev,
                                 'total_minutes': n_ev * np.random.uniform(3, 30)})
 
-        if cnt > 0:  # scratch events
+        if cnt > 0:
             evs = [_imu_feat(3, si) for _ in range(cnt)]
             records.append({'date': d_obj, 'behavior': 3,
                             'ax_mean': np.mean([e['ax'] for e in evs]),
@@ -355,8 +388,6 @@ def gen_imu_daily_agg(sc: dict, seed: int = 42) -> pd.DataFrame:
                             'gx_mean': np.mean([e['gx'] for e in evs]),
                             'gy_mean': np.mean([e['gy'] for e in evs]),
                             'gz_mean': np.mean([e['gz'] for e in evs]),
-                            'az_rms_mean': np.mean([e['az_rms'] for e in evs]),
-                            'hz_mean': np.mean([e['scratch_hz'] for e in evs]),
                             'event_count': cnt,
                             'total_minutes': cnt * np.random.uniform(0.02, 0.13)})
 
@@ -376,19 +407,24 @@ def get_skin(sn: str) -> pd.DataFrame:
     if sn not in _skin_cache:
         if _DB_AVAILABLE:
             t   = sn.lower()
-            sql = f'''SELECT FROM_UNIXTIME(stat_date_ts/1000) AS date,
-                        scratch_count, avg_temperature, avg_humidity,
-                        baseline_mean, baseline_std, temp_coef, temp_effect,
+            sql = f'''SELECT stat_date AS date,
+                        scratch_count, baseline_mean, baseline_std,
                         zscore, avg_zscore, consec_abnormal, eval_phase,
-                        threshold_z, threshold_consec, threshold_avgz,
+                        threshold_z, threshold_consec,
                         valid_days, is_abnormal, alert_triggered, alert_reason,
-                        data_quality, in_warmup_flag, in_gap_flag, just_resumed_flag
-                      FROM `{t}` ORDER BY stat_date_ts'''
+                        data_quality,
+                        (data_quality = 0 AND eval_phase = 0) AS in_warmup_flag,
+                        (data_quality IN (1,2,3,4))           AS in_gap_flag,
+                        (data_quality = 5)                    AS just_resumed_flag
+                      FROM `{t}` ORDER BY stat_date'''
             df = _db_read(sql, SKIN_DB)
             df['date'] = pd.to_datetime(df['date'])
         else:
             sc = SC_MAP[sn]
             df = gen_skin_daily(sc, seed=42 + list(SC_MAP).index(sn))
+        # synthesize avg_temperature / avg_humidity from global arrays for inline
+        if not _DB_AVAILABLE:
+            pass  # already in inline-generated df
         _skin_cache[sn] = df
     return _skin_cache[sn]
 
@@ -396,15 +432,16 @@ def get_imu(sn: str) -> pd.DataFrame:
     if sn not in _imu_cache:
         if _DB_AVAILABLE:
             t   = sn.lower()
-            sql = f'''SELECT DATE(FROM_UNIXTIME(ts_start/1000)) AS date, behavior,
+            sql = f'''SELECT DATE(FROM_UNIXTIME(ts_start/1000)) AS date,
                         AVG(ax) ax_mean, AVG(ay) ay_mean, AVG(az) az_mean,
                         AVG(gx) gx_mean, AVG(gy) gy_mean, AVG(gz) gz_mean,
-                        AVG(az_rms) az_rms_mean, AVG(scratch_hz) hz_mean,
                         COUNT(*) event_count,
                         SUM(ts_end-ts_start)/60000.0 total_minutes
-                      FROM `{t}` GROUP BY date, behavior ORDER BY date, behavior'''
+                      FROM `{t}` GROUP BY date ORDER BY date'''
             df = _db_read(sql, IMU_DB)
             df['date'] = pd.to_datetime(df['date'])
+            # behavior column not stored in imu table; derive from pattern (optional placeholder)
+            df['behavior'] = 1
         else:
             sc = SC_MAP[sn]
             df = gen_imu_daily_agg(sc, seed=42 + list(SC_MAP).index(sn))
@@ -413,8 +450,26 @@ def get_imu(sn: str) -> pd.DataFrame:
 
 def get_baseline() -> pd.DataFrame:
     if _DB_AVAILABLE:
-        sql = 'SELECT device_sn, baseline_mean, baseline_std, temp_coef, valid_days, eval_phase, confidence FROM skin_baseline'
-        return _db_read(sql, SKIN_DB)
+        rows = []
+        for sc in SCENARIOS:
+            t   = sc['sn'].lower()
+            sql = f'''SELECT MAX(stat_date) AS stat_date, baseline_mean, baseline_std,
+                             temp_coef, confidence, valid_days
+                      FROM `{t}`
+                      ORDER BY stat_date DESC LIMIT 1'''
+            try:
+                df = _db_read(sql, BSL_DB)
+                if not df.empty:
+                    row = df.iloc[0]
+                    rows.append({'device_sn': sc['sn'],
+                                 'baseline_mean': row['baseline_mean'],
+                                 'baseline_std':  row['baseline_std'],
+                                 'temp_coef':     row['temp_coef'],
+                                 'valid_days':     row['valid_days'],
+                                 'confidence':     row['confidence']})
+            except Exception:
+                pass
+        return pd.DataFrame(rows)
     rows = []
     for idx, sc in enumerate(SCENARIOS):
         df = get_skin(sc['sn'])
@@ -422,13 +477,13 @@ def get_baseline() -> pd.DataFrame:
         last30 = ok.tail(30)
         if last30.empty: continue
         counts = last30['scratch_count'].values
-        temps  = last30['avg_temperature'].values
-        vd     = min(int(last30['valid_days'].max()), 30)
+        temps  = last30.get('avg_temperature', pd.Series(dtype=float)).values
+        vd     = min(int(last30['valid_days'].max()), 30) if 'valid_days' in last30 else 0
         rows.append({'device_sn': sc['sn'],
                      'baseline_mean': round(float(np.mean(counts)), 2),
                      'baseline_std':  round(max(float(np.std(counts)), MIN_STD), 2),
-                     'temp_coef':     _temp_coef(list(counts), list(temps)),
-                     'valid_days':    vd, 'eval_phase': _phase(vd),
+                     'temp_coef':     _temp_coef(list(counts), list(temps)) if len(temps) else 0.0,
+                     'valid_days':    vd,
                      'confidence':    _conf(vd)})
     return pd.DataFrame(rows)
 
@@ -473,47 +528,41 @@ def fig_imu():
     if imu.empty:
         print('  [01] IMU 数据为空，跳过'); return
 
-    fig = plt.figure(figsize=(22, 20))
+    fig = plt.figure(figsize=(22, 18))
     fig.suptitle(f'IMU 6轴原始数据  —  {SN_LABEL[sn]}\n'
-                 f'（每点=当日该行为类型的均值；抓挠事件在第60-80天明显增强）',
+                 f'（每点=当日均值；抓挠事件在第60-80天明显增强）',
                  fontsize=14, fontweight='bold', y=0.98)
 
     axes_info = [
-        ('az_rms_mean', '活动强度 az_rms (mg)', None),
-        ('ax_mean',     '加速度 ax (mg)',         None),
-        ('ay_mean',     '加速度 ay (mg)',         None),
-        ('az_mean',     '加速度 az (mg)',         None),
-        ('gx_mean',     '陀螺仪 gx (deg/s)',      None),
-        ('gy_mean',     '陀螺仪 gy (deg/s)',      None),
-        ('gz_mean',     '陀螺仪 gz (deg/s)',      None),
+        ('ax_mean', '加速度 ax (mg)', None),
+        ('ay_mean', '加速度 ay (mg)', None),
+        ('az_mean', '加速度 az (mg)', None),
+        ('gx_mean', '陀螺仪 gx (deg/s)', None),
+        ('gy_mean', '陀螺仪 gy (deg/s)', None),
+        ('gz_mean', '陀螺仪 gz (deg/s)', None),
     ]
 
-    gs = gridspec.GridSpec(7, 1, hspace=0.18, top=0.92, bottom=0.06,
+    gs = gridspec.GridSpec(6, 1, hspace=0.18, top=0.92, bottom=0.06,
                            left=0.09, right=0.97)
 
     for row_i, (col, ylabel, _) in enumerate(axes_info):
         ax = fig.add_subplot(gs[row_i])
-        for btype in [2, 1, 3]:
-            sub = imu[imu['behavior'] == btype]
-            if sub.empty: continue
-            y = sub[col].fillna(0)
-            ax.scatter(sub['date'], y, c=BEH_COLORS[btype],
-                       s=22, alpha=0.55, label=BEH_LABELS[btype], zorder=4)
 
-        # 发病期高亮
-        d0 = pd.Timestamp('2024-03-01')   # day 60
-        d1 = pd.Timestamp('2024-03-21')   # day 80
+        col_c = SN_COLOR[sn]
+        if col in imu.columns:
+            y = imu[col].fillna(0)
+            ax.scatter(imu['date'], y, c=col_c, s=22, alpha=0.55, zorder=4)
+
+        d0 = pd.Timestamp('2024-03-01')
+        d1 = pd.Timestamp('2024-03-21')
         ax.axvspan(d0, d1, alpha=0.10, color='#E74C3C', zorder=0)
 
         ax.set_ylabel(ylabel, fontsize=9)
         ax.tick_params(axis='x', labelsize=8,
                        labelbottom=(row_i == len(axes_info)-1))
         if row_i == 0:
-            handles = [mpatches.Patch(color=BEH_COLORS[b], label=BEH_LABELS[b])
-                       for b in [2, 1, 3]]
-            handles.append(mpatches.Patch(color='#E74C3C', alpha=0.3, label='发病期(第60-80天)'))
-            ax.legend(handles=handles, fontsize=9, loc='upper left',
-                      framealpha=0.9, ncol=4)
+            handles = [mpatches.Patch(color='#E74C3C', alpha=0.3, label='发病期(第60-80天)')]
+            ax.legend(handles=handles, fontsize=9, loc='upper left', framealpha=0.9)
         if row_i == len(axes_info) - 1:
             ax.xaxis.set_major_formatter(
                 plt.matplotlib.dates.DateFormatter('%m-%d'))
@@ -522,7 +571,7 @@ def fig_imu():
     path = os.path.join(OUT_DIR, '01_imu_6axis.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
-    print(f'  ✅ 已保存: {path}')
+    print(f'  [OK] 已保存: {path}')
 
 
 # ══════════════════════════════════════════════════════
@@ -530,40 +579,20 @@ def fig_imu():
 # ══════════════════════════════════════════════════════
 def fig_behavior():
     sns_show = KEY_SNS
-    fig, axes = plt.subplots(2, 4, figsize=(24, 12))
-    fig.suptitle('行为识别分析  —  4个代表场景\n'
-                 '上行: 行为时间占比（运动/睡眠/抓挠）；下行: 每日抓挠次数时序',
-                 fontsize=14, fontweight='bold', y=0.99)
-    fig.subplots_adjust(hspace=0.45, wspace=0.32, top=0.90, bottom=0.08)
+    fig, axes = plt.subplots(1, 4, figsize=(24, 7))
+    fig.suptitle('每日抓挠次数时序  —  4个代表场景\n'
+                 '红色=异常天；垂直虚线=报警触发；灰色背景=缺口天',
+                 fontsize=14, fontweight='bold', y=1.02)
+    fig.subplots_adjust(hspace=0.45, wspace=0.32, top=0.90, bottom=0.12)
 
     for col, sn in enumerate(sns_show):
-        imu  = get_imu(sn)
-        skin = get_skin(sn)
+        skin  = get_skin(sn)
         col_c = SN_COLOR[sn]
 
-        # 上行：饼图（行为时长占比）
-        ax_pie = axes[0][col]
-        if not imu.empty:
-            agg = imu.groupby('behavior')['total_minutes'].sum()
-            sizes  = [agg.get(b, 0) for b in [2, 1, 3]]
-            labels = [f'{BEH_LABELS[b]}\n{agg.get(b,0):.0f}h' for b in [2,1,3]]
-            colors = [BEH_COLORS[b] for b in [2, 1, 3]]
-            wedges, texts, autotexts = ax_pie.pie(
-                sizes, labels=labels, colors=colors,
-                autopct='%1.1f%%', startangle=90,
-                pctdistance=0.75, labeldistance=1.15,
-                textprops={'fontsize': 9})
-            for at in autotexts:
-                at.set_fontsize(8)
-        ax_pie.set_title(SN_LABEL[sn], fontsize=10, pad=8, fontweight='bold',
-                         color=col_c)
+        ax_bar = axes[col]
+        ok     = skin[(skin['data_quality']==0) | (skin['in_warmup_flag']==1)]
 
-        # 下行：每日抓挠次数柱状图
-        ax_bar = axes[1][col]
-        ok = skin[(skin['data_quality']==0) | (skin['in_warmup_flag']==1)]
-        gap_df = skin[skin['in_gap_flag']==1]
-
-        bar_c = ['#E74C3C' if r['is_abnormal'] else '#BDC3C7' if r['in_warmup_flag']
+        bar_c = ['#E74C3C' if r.get('is_abnormal') else '#BDC3C7' if r.get('in_warmup_flag')
                  else col_c
                  for _, r in ok.iterrows()]
         ax_bar.bar(ok['date'], ok['scratch_count'], color=bar_c,
@@ -571,10 +600,14 @@ def fig_behavior():
 
         _gap_bg(ax_bar, skin)
 
-        # 发病期标注
         sc = SC_MAP[sn]
         if sc.get('sick'):
             s, e = sc['sick']
+            d0 = pd.Timestamp(START_DATE + timedelta(days=s))
+            d1 = pd.Timestamp(START_DATE + timedelta(days=e))
+            ax_bar.axvspan(d0, d1, alpha=0.12, color='#E74C3C', zorder=0)
+        episodes = sc.get('sick_episodes', [])
+        for s, e in episodes:
             d0 = pd.Timestamp(START_DATE + timedelta(days=s))
             d1 = pd.Timestamp(START_DATE + timedelta(days=e))
             ax_bar.axvspan(d0, d1, alpha=0.12, color='#E74C3C', zorder=0)
@@ -584,9 +617,9 @@ def fig_behavior():
         ax_bar.xaxis.set_major_formatter(
             plt.matplotlib.dates.DateFormatter('%m-%d'))
         plt.setp(ax_bar.xaxis.get_majorticklabels(), rotation=30, fontsize=8)
-        ax_bar.set_title(f'日抓挠次数  (异常天=红色)', fontsize=9)
+        ax_bar.set_title(f'{SN_LABEL[sn]}', fontsize=10, fontweight='bold', color=col_c)
 
-        total_abn = int(skin['is_abnormal'].sum())
+        total_abn   = int(skin['is_abnormal'].sum())
         total_alert = int(skin['alert_triggered'].sum())
         ax_bar.text(0.99, 0.97,
                     f'异常{total_abn}天\n推送{total_alert}次',
@@ -598,7 +631,7 @@ def fig_behavior():
     path = os.path.join(OUT_DIR, '02_behavior.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
-    print(f'  ✅ 已保存: {path}')
+    print(f'  [OK] 已保存: {path}')
 
 
 # ══════════════════════════════════════════════════════
@@ -616,11 +649,11 @@ def fig_health():
                   '③ 连续异常天数 + 推送触发']
 
     for col, sn in enumerate(KEY_SNS):
-        df   = get_skin(sn)
+        df    = get_skin(sn)
         col_c = SN_COLOR[sn]
-        ok   = df[df['data_quality'] == 0]
-        ev   = ok[ok['baseline_mean'].notna()]
-        sc   = SC_MAP[sn]
+        ok    = df[df['data_quality'] == 0]
+        ev    = ok[ok['baseline_mean'].notna()]
+        sc    = SC_MAP[sn]
 
         # 行 0：抓挠次数 + 基线
         ax0 = axes[0][col]
@@ -639,6 +672,10 @@ def fig_health():
         _alert_vlines(ax0, df)
         if sc.get('sick'):
             s, e = sc['sick']
+            ax0.axvspan(pd.Timestamp(START_DATE+timedelta(days=s)),
+                        pd.Timestamp(START_DATE+timedelta(days=e)),
+                        alpha=0.08, color='#E74C3C')
+        for s, e in sc.get('sick_episodes', []):
             ax0.axvspan(pd.Timestamp(START_DATE+timedelta(days=s)),
                         pd.Timestamp(START_DATE+timedelta(days=e)),
                         alpha=0.08, color='#E74C3C')
@@ -704,32 +741,32 @@ def fig_health():
     path = os.path.join(OUT_DIR, '03_health.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
-    print(f'  ✅ 已保存: {path}')
+    print(f'  [OK] 已保存: {path}')
 
 
 # ══════════════════════════════════════════════════════
 #  图 04 — 个体基线演变
 # ══════════════════════════════════════════════════════
 def fig_baseline():
+    show_sns = ['device_sn_1','device_sn_2','device_sn_4','device_sn_6',
+                'device_sn_8','device_sn_22','device_sn_23','device_sn_24']
+
     fig, (ax_mean, ax_conf) = plt.subplots(2, 1, figsize=(22, 12))
-    fig.suptitle('个体基线演变  —  全部 8 个设备\n'
+    fig.suptitle('个体基线演变  —  8个代表设备\n'
                  '上图: 基线均值随时间的学习过程；下图: 置信度积累（30天达到满分）',
                  fontsize=14, fontweight='bold')
     fig.subplots_adjust(hspace=0.40, top=0.91, bottom=0.08)
 
-    bsl_all = get_baseline()
-    phase_colors = {0:'#BDC3C7', 1:'#FADBD8', 2:'#FEF9E7', 3:'#D5F5E3'}
-
-    for sn, _, col_c in DEV_META:
-        df = get_skin(sn)
-        ok = df[(df['in_gap_flag']==0) & (df['baseline_mean'].notna())]
+    for sn in show_sns:
+        col_c = SN_COLOR[sn]
+        df    = get_skin(sn)
+        ok    = df[(df['in_gap_flag']==0) & (df['baseline_mean'].notna())]
         if ok.empty: continue
 
         ax_mean.plot(ok['date'], ok['baseline_mean'],
                      color=col_c, lw=2.0, alpha=0.85,
                      label=SN_LABEL[sn], zorder=4)
 
-        # 置信度 = valid_days / 30，只取 data_quality==0 的天
         ok2 = df[(df['data_quality']==0) & (df['valid_days'].notna())]
         if not ok2.empty:
             conf_vals = (ok2['valid_days'].clip(upper=30) / 30).round(2)
@@ -737,15 +774,12 @@ def fig_baseline():
                          color=col_c, lw=2.0, alpha=0.85,
                          label=SN_LABEL[sn], zorder=4)
 
-    # 阶段分界线
     for ax_obj in [ax_mean, ax_conf]:
         for day, lbl, lc in [(WARMUP, f'第{WARMUP+1}天\n评估开始', '#95A5A6'),
                              (14,     '第15天',                     '#85C1E9'),
                              (30,     '第31天（稳定期）',             '#2980B9')]:
             d = pd.Timestamp(START_DATE + timedelta(days=day))
             ax_obj.axvline(d, color=lc, lw=1.2, ls=':', alpha=0.7, zorder=2)
-            ax_obj.text(d, ax_obj.get_ylim()[1] if ax_obj.get_ylim()[1] != 0 else 1,
-                        lbl, fontsize=7.5, ha='center', color=lc)
 
     ax_mean.set_title('基线均值 baseline_mean（次/天）', fontsize=11, loc='left')
     ax_mean.set_ylabel('次/天', fontsize=10)
@@ -763,13 +797,12 @@ def fig_baseline():
     ax_conf.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%m-%d'))
     plt.setp(ax_conf.xaxis.get_majorticklabels(), rotation=25)
 
-    # 右侧最终基线值标注
     bsl = get_baseline()
     if not bsl.empty:
-        for _, row in bsl.iterrows():
+        for _, row in bsl[bsl['device_sn'].isin(show_sns)].iterrows():
             col_c = SN_COLOR.get(row['device_sn'], 'gray')
-            df = get_skin(row['device_sn'])
-            ok = df[df['baseline_mean'].notna()]
+            df    = get_skin(row['device_sn'])
+            ok    = df[df['baseline_mean'].notna()]
             if ok.empty: continue
             last_date = ok['date'].iloc[-1]
             ax_mean.annotate(f"{row['baseline_mean']:.1f}",
@@ -780,7 +813,7 @@ def fig_baseline():
     path = os.path.join(OUT_DIR, '04_baseline.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
-    print(f'  ✅ 已保存: {path}')
+    print(f'  [OK] 已保存: {path}')
 
 
 # ══════════════════════════════════════════════════════
@@ -792,7 +825,7 @@ def fig_neck_temp():
 
     fig, axes = plt.subplots(3, 1, figsize=(20, 14), sharex=True)
     fig.suptitle('脖子（皮肤）温度估算  —  3个设备对比\n'
-                 '基于日均抓挠强度与炎症状态推算（真实系统中由项圈内置温度传感器提供）',
+                 '基于日均抓挠强度与炎症状态推算',
                  fontsize=14, fontweight='bold')
     fig.subplots_adjust(hspace=0.38, top=0.91, bottom=0.07)
 
@@ -803,17 +836,16 @@ def fig_neck_temp():
 
         n = len(df)
         np.random.seed(99 + row_i)
-        noise = np.random.normal(0, 0.15, n)
-        daily_wave = 0.15 * np.sin(np.arange(n) * 2 * np.pi / 7)  # 7天周期波动
+        noise      = np.random.normal(0, 0.15, n)
+        daily_wave = 0.15 * np.sin(np.arange(n) * 2 * np.pi / 7)
 
-        cnt  = df['scratch_count'].fillna(0).values
-        abn  = df['is_abnormal'].fillna(0).values
-        gap  = df['in_gap_flag'].fillna(0).values
+        cnt = df['scratch_count'].fillna(0).values
+        abn = df['is_abnormal'].fillna(0).values
+        gap = df['in_gap_flag'].fillna(0).values
 
         neck = 38.5 + 0.03 * cnt + 0.85 * abn + daily_wave + noise
         neck = np.where(gap == 1, np.nan, neck)
 
-        # 基础温度线
         base = 38.5 + daily_wave + noise * 0.3
         base = np.where(gap == 1, np.nan, base)
 
@@ -857,39 +889,46 @@ def fig_neck_temp():
     path = os.path.join(OUT_DIR, '05_neck_temp.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
-    print(f'  ✅ 已保存: {path}')
+    print(f'  [OK] 已保存: {path}')
 
 
 # ══════════════════════════════════════════════════════
 #  图 06 — 环境温湿度 & 行为相关性
 # ══════════════════════════════════════════════════════
 def fig_env():
+    show_env_sns = ['device_sn_1', 'device_sn_8', 'device_sn_17', 'device_sn_20']
+
     fig = plt.figure(figsize=(22, 16))
     fig.suptitle('环境温湿度与抓挠行为相关性\n'
-                 '上图: 温度时序（8设备共享同一环境）；中图: 湿度时序；下图: 温度 vs 抓挠次数散点',
+                 '上图: 温度时序；中图: 湿度时序；下图: 温度 vs 抓挠次数散点',
                  fontsize=14, fontweight='bold')
     gs = gridspec.GridSpec(3, 2, figure=fig, hspace=0.48, wspace=0.30,
                            top=0.91, bottom=0.07, left=0.08, right=0.97)
 
     ax_temp = fig.add_subplot(gs[0, :])
     ax_humi = fig.add_subplot(gs[1, :])
-    ax_sc_a = fig.add_subplot(gs[2, 0])   # 散点（A: normal）
-    ax_sc_b = fig.add_subplot(gs[2, 1])   # 散点（C: season）
+    ax_sc_a = fig.add_subplot(gs[2, 0])
+    ax_sc_b = fig.add_subplot(gs[2, 1])
 
-    # 温度 & 湿度：所有设备从同一环境（取A的数据即可，但叠加所有展示一致性）
-    for sn, _, col_c in DEV_META:
-        df = get_skin(sn)
-        ok = df[(df['data_quality']==0) | (df['in_warmup_flag']==1)]
-        if ok.empty: continue
+    for sn in show_env_sns:
+        col_c = SN_COLOR[sn]
+        df    = get_skin(sn)
+        ok    = df[(df['data_quality']==0) | (df['in_warmup_flag']==1)]
+        if ok.empty or 'avg_temperature' not in ok.columns: continue
         ax_temp.plot(ok['date'], ok['avg_temperature'],
-                     color=col_c, lw=1.3, alpha=0.55, label=SN_LABEL[sn])
+                     color=col_c, lw=1.3, alpha=0.7, label=SN_LABEL[sn])
         ax_humi.plot(ok['date'], ok['avg_humidity'],
-                     color=col_c, lw=1.3, alpha=0.55, label=SN_LABEL[sn])
+                     color=col_c, lw=1.3, alpha=0.7, label=SN_LABEL[sn])
+
+    if all('avg_temperature' not in get_skin(sn).columns for sn in show_env_sns):
+        dates = [START_DATE + timedelta(days=i) for i in range(DAYS)]
+        dates_ts = pd.to_datetime(dates)
+        ax_temp.plot(dates_ts, _TEMP_ARR, color='#2980B9', lw=1.5, label='全局温度')
+        ax_humi.plot(dates_ts, _HUMI_ARR, color='#27AE60', lw=1.5, label='全局湿度')
 
     ax_temp.set_ylabel('温度 (°C)', fontsize=10)
     ax_temp.set_title('① 环境温度（180天）', fontsize=11, loc='left')
-    ax_temp.legend(fontsize=8, loc='upper right', framealpha=0.9,
-                   ncol=4, bbox_to_anchor=(1.0, 1.0))
+    ax_temp.legend(fontsize=8, loc='upper right', framealpha=0.9, ncol=4)
     ax_temp.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%m-%d'))
     plt.setp(ax_temp.xaxis.get_majorticklabels(), rotation=25)
 
@@ -898,20 +937,18 @@ def fig_env():
     ax_humi.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%m-%d'))
     plt.setp(ax_humi.xaxis.get_majorticklabels(), rotation=25)
 
-    # 散点：温度 vs 抓挠次数
     for ax_sc, sn, title in [
-        (ax_sc_a, 'device_sn_1',  '场景A（正常）  温度系数≈0.10'),
-        (ax_sc_b, 'device_sn_3',  '场景C（季节性）温度系数≈0.25'),
+        (ax_sc_a, 'device_sn_1',  '场景：完全正常（温度系数≈0.10）'),
+        (ax_sc_b, 'device_sn_8',  '场景：季节性过敏（温度系数≈0.35）'),
     ]:
-        df   = get_skin(sn)
-        ok   = df[(df['data_quality']==0) & (df['in_warmup_flag']==0)]
+        df    = get_skin(sn)
+        ok    = df[(df['data_quality']==0) & (df['in_warmup_flag']==0)]
         col_c = SN_COLOR[sn]
-        if ok.empty: continue
+        if ok.empty or 'avg_temperature' not in ok.columns: continue
 
         sc_obj = ax_sc.scatter(ok['avg_temperature'], ok['scratch_count'],
                                c=ok['avg_temperature'], cmap='RdYlBu_r',
                                s=30, alpha=0.6, zorder=4)
-        # 趋势线
         x = ok['avg_temperature'].values
         y = ok['scratch_count'].values
         valid = ~(np.isnan(x) | np.isnan(y))
@@ -931,13 +968,20 @@ def fig_env():
     path = os.path.join(OUT_DIR, '06_env.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
-    print(f'  ✅ 已保存: {path}')
+    print(f'  [OK] 已保存: {path}')
 
 
 # ══════════════════════════════════════════════════════
 #  主程序
 # ══════════════════════════════════════════════════════
-if __name__ == '__main__':
+def query_summary():
+    print("\n======= 可视化数据来源 =======")
+    print(f"  数据来源: {'MySQL 数据库' if _DB_AVAILABLE else '内联生成（等价数据）'}")
+    print(f"  场景数量: {len(SCENARIOS)} 个")
+    print(f"  输出目录: {OUT_DIR}")
+
+
+def main():
     print(f'\n{"="*55}')
     print(f'  数据来源: {"MySQL 数据库" if _DB_AVAILABLE else "内联生成（等价数据）"}')
     print(f'  输出目录: {OUT_DIR}')
@@ -957,7 +1001,11 @@ if __name__ == '__main__':
         try:
             fn()
         except Exception as e:
-            print(f'  ❌ 失败: {e}')
+            print(f'  [FAIL] 失败: {e}')
             import traceback; traceback.print_exc()
 
-    print(f'\n🎉 全部完成！图表已保存到: {OUT_DIR}')
+    print(f'\n[完成] 全部图表已保存到: {OUT_DIR}')
+
+
+if __name__ == '__main__':
+    main()
