@@ -1,6 +1,6 @@
 # mysql_infra
 
-本地 MySQL 8.0 测试环境，仅用于算法数据模拟与验证。
+本地 MySQL 8.0 测试环境，仅用于宠物项圈皮肤健康监测算法的数据模拟与验证。
 
 ---
 
@@ -8,15 +8,17 @@
 
 ```
 mysql_infra/
-├── docker-compose.yml      # MySQL 容器配置
-├── .env                    # 环境变量（密码、默认库名）
-├── mysql-data/             # 数据持久化目录（自动创建）
-├── mysql-init/             # 初始化 SQL 脚本目录（可选）
-├── imu_raw_db.py           # 创建 pet_dog_imu 库 + 生成 IMU 原始数据
-├── skin_assessment_db.py   # 创建 pet_dog_skin 库 + 生成健康评估数据
-├── visualize_db.py         # 从数据库读取数据，生成 6 张可视化图表
-├── charts/                 # 可视化输出图片
-└── ...                     # 旧版单表脚本（skin_health_db.py 等）
+├── docker-compose.yml        # MySQL 容器配置
+├── .env                      # 环境变量（密码、默认库名）
+├── mysql-data/               # 数据持久化目录（自动创建）
+├── mysql-init/               # 初始化 SQL 脚本目录（可选）
+├── imu_raw_db.py             # 创建 pet_dog_imu 库 + 生成 IMU 原始事件数据
+├── environment_db.py         # 创建 pet_dog_environment 库 + 生成环境传感器数据
+├── behavior_db.py            # 创建 pet_dog_behavior 库 + 生成行为识别事件数据
+├── skin_assessment_db.py     # 创建 pet_dog_skin_assessment 库 + 生成皮肤健康评估数据
+├── scratch_baseline_db.py    # 创建 pet_dog_scratch_baseline 库 + 生成抓挠基线快照数据
+├── visualize_db.py           # 从数据库读取数据，生成 6 张可视化图表
+└── charts/                   # 可视化输出图片目录
 ```
 
 ---
@@ -38,9 +40,14 @@ docker ps
 
 ### 2. 写入模拟数据
 
+按顺序执行（各脚本可独立运行，互不依赖）：
+
 ```bash
-python imu_raw_db.py           # 写入 pet_dog_imu（IMU 原始事件数据）
-python skin_assessment_db.py   # 写入 pet_dog_skin（健康评估 + 基线）
+python imu_raw_db.py            # 写入 pet_dog_imu（IMU 原始事件）
+python environment_db.py        # 写入 pet_dog_environment（环境传感器）
+python behavior_db.py           # 写入 pet_dog_behavior（行为识别事件）
+python skin_assessment_db.py    # 写入 pet_dog_skin_assessment（皮肤健康评估）
+python scratch_baseline_db.py   # 写入 pet_dog_scratch_baseline（抓挠基线快照）
 ```
 
 ### 3. 生成可视化图表
@@ -61,73 +68,7 @@ python visualize_db.py          # 图表输出到 ./charts/
 | 查看实时日志 | `docker-compose logs -f` |
 | 停止容器（保留数据） | `docker-compose stop` |
 | 停止并删除容器 | `docker-compose down` |
-| **停止并删除容器 + 数据卷** | `docker-compose down -v` |
-
----
-
-## 删除数据
-
-### 只清空数据库表（容器保持运行）
-
-```bash
-# 进入容器
-docker exec -it local-mysql8 mysql -uroot -p123456
-
-# 删除整个数据库（在 MySQL 内执行）
-DROP DATABASE pet_dog_imu;
-DROP DATABASE pet_dog_skin;
-exit
-```
-
-重新写入：
-
-```bash
-python imu_raw_db.py
-python skin_assessment_db.py
-```
-
-### 删除容器 + 所有持久化数据（彻底重置）
-
-```bash
-docker-compose down          # 停止并删除容器
-rm -rf ./mysql-data          # 删除本地数据目录
-docker-compose up -d         # 重新启动（全新状态）
-```
-
----
-
-## 数据库说明
-
-### `pet_dog_imu` — IMU 原始数据库
-
-每个设备一张表 `imu_raw_{device_sn}`，记录行为事件级 IMU 特征：
-
-| 字段 | 说明 |
-|------|------|
-| `ts_start / ts_end` | 行为时间段（UTC ms） |
-| `behavior` | 1=运动 2=睡眠 3=抓挠 |
-| `ax/ay/az` | 加速度均值（mg） |
-| `gx/gy/gz` | 陀螺仪均值（deg/s） |
-| `az_rms` | 垂直加速度 RMS（活动强度） |
-| `scratch_hz` | 抓挠主频 Hz（仅抓挠事件） |
-
-### `pet_dog_skin` — 皮肤健康评估库
-
-- `skin_daily_{device_sn}`：每日评估结果（z-score、基线、报警等）
-- `skin_baseline`：各设备个体基线汇总
-
-### 五个场景 / 八个设备
-
-| 设备 | 场景 | 说明 |
-|------|------|------|
-| device_sn_1 | A | 完全正常，180 天 |
-| device_sn_2 | B | 第 60-80 天皮肤病爆发后康复 |
-| device_sn_3 | C | 季节性升高，温度系数 0.25，温度修正后不误报 |
-| device_sn_4 | D | 过敏缓慢加重，基线追上后不误报 |
-| device_sn_5 | E1 | 忘记佩戴（第 35-37 天缺口） |
-| device_sn_6 | E2 | 没电缺口（第 40-44 天）+ 缺口后皮肤病 |
-| device_sn_7 | E3 | 信号不稳定（第 20-80 天间歇丢失） |
-| device_sn_8 | E4 | 项圈松动（第 50-57 天数据无效） |
+| 停止并删除容器 + 数据卷 | `docker-compose down -v` |
 
 ---
 
@@ -139,3 +80,159 @@ port:     3306
 user:     root
 password: 123456
 ```
+
+---
+
+## 数据库说明
+
+### 1. `pet_dog_imu` — IMU 原始事件库
+
+每个设备一张独立表（`device_sn_1` ~ `device_sn_24`），每行为一次连续行为片段的 IMU 特征摘要。
+
+共 24 张表，每张表约 2000~4000 行（180 天 × 每天若干事件）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | BIGINT | 自增主键 |
+| `ts_start` | BIGINT | 行为开始时间（UTC ms） |
+| `ts_end` | BIGINT | 行为结束时间（UTC ms） |
+| `ax` | DECIMAL(8,2) | 加速度 X 轴均值（mg） |
+| `ay` | DECIMAL(8,2) | 加速度 Y 轴均值（mg） |
+| `az` | DECIMAL(8,2) | 加速度 Z 轴均值（mg，重力方向） |
+| `gx` | DECIMAL(8,2) | 陀螺仪 X 轴均值（deg/s） |
+| `gy` | DECIMAL(8,2) | 陀螺仪 Y 轴均值（deg/s） |
+| `gz` | DECIMAL(8,2) | 陀螺仪 Z 轴均值（deg/s） |
+
+### 2. `pet_dog_environment` — 环境传感器库
+
+每个设备一张独立表，每行为一天一条传感器采样记录。
+
+共 24 张表，每张表 180 行（每天一条）。缺口天的 `neck_temp` 为 NULL。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | BIGINT | 自增主键 |
+| `ts` | BIGINT | 采样日 UTC 零点（ms） |
+| `neck_temp` | DECIMAL(5,2) | 脖颈温度 °C（炎症期偏高；缺口天为 NULL） |
+| `env_temp` | DECIMAL(5,1) | 环境温度 °C（全局共享序列） |
+| `env_humidity` | DECIMAL(5,1) | 环境湿度 %（全局共享序列） |
+
+### 3. `pet_dog_behavior` — 行为识别事件库
+
+每个设备一张独立表，每行为 ML 模型输出的一次行为识别事件。
+
+共 24 张表，每张表约 2000~4000 行。缺口天无数据。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | BIGINT | 自增主键 |
+| `ts_start` | BIGINT | 行为开始时间（UTC ms） |
+| `ts_end` | BIGINT | 行为结束时间（UTC ms） |
+| `behavior` | TINYINT | 行为类型：1=运动  2=睡眠  3=抓挠 |
+| `duration_sec` | DECIMAL(10,2) | 持续时长（秒） |
+| `confidence` | DECIMAL(5,3) | 模型置信度（0.000~1.000） |
+
+### 4. `pet_dog_skin_assessment` — 皮肤健康评估库
+
+每个设备一张独立表，每行为一天的评估结果，由 EWMA 动态基线 + z-score 算法生成。
+
+共 24 张表，每张表 180 行。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `stat_date` | DATE | 统计日期（主键） |
+| `scratch_count` | INT | 当日抓挠总次数 |
+| `baseline_mean` | DECIMAL(6,2) | 个体动态基线均值（次/天） |
+| `baseline_std` | DECIMAL(6,2) | 个体基线标准差 |
+| `zscore` | DECIMAL(6,2) | 温度修正后 z-score |
+| `avg_zscore` | DECIMAL(6,2) | 近 N 天均值 z-score |
+| `consec_abnormal` | INT | 当前连续异常天数 |
+| `eval_phase` | TINYINT | 评估阶段：0=热身期  1=早期  2=过渡期  3=稳定期 |
+| `threshold_z` | DECIMAL(4,2) | 当日 z-score 门槛 |
+| `threshold_consec` | TINYINT | 当日连续天数门槛 |
+| `is_abnormal` | TINYINT(1) | 当日是否异常（0=正常  1=异常） |
+| `alert_triggered` | TINYINT(1) | 是否触发报警（0=无  1=报警） |
+| `alert_reason` | VARCHAR(256) | 报警原因描述 |
+| `data_quality` | TINYINT | 数据质量：0=正常  1=未佩戴  2=没电  3=信号丢失  4=松动  5=缓冲天 |
+| `wear_minutes` | INT | 有效佩戴分钟数 |
+
+### 5. `pet_dog_scratch_baseline` — 抓挠基线快照库
+
+每个设备一张独立表，每行为当天算法运行后的基线状态快照。缺口天不保存快照。
+
+共 24 张表，每张表约 150~177 行（扣除热身期和缺口天）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `stat_date` | DATE | 统计日期（主键） |
+| `baseline_mean` | DECIMAL(6,2) | 基线均值（次/天） |
+| `baseline_std` | DECIMAL(6,2) | 基线标准差 |
+| `temp_coef` | DECIMAL(5,3) | 温度修正系数（次/°C） |
+| `confidence` | DECIMAL(4,2) | 基线置信度（0.00~1.00，有效天/30） |
+| `valid_days` | INT | 参与计算的有效正常天数 |
+
+---
+
+## 场景说明
+
+共 24 个设备，覆盖健康状态、设备质量、环境变化、个体差异四大类场景。
+
+### 健康场景（device_sn_1 ~ device_sn_9）
+
+| 设备 | 场景名称 | 说明 |
+|------|---------|------|
+| device_sn_1 | 完全正常 | 180 天抓挠均值约 10 次/天，基线稳定，无报警 |
+| device_sn_2 | 急性皮肤病后康复 | 第 60~80 天发病（均值 30 次/天），之后恢复正常；测试报警触发与康复 |
+| device_sn_3 | 慢性皮肤病（不恢复） | 第 60 天起持续高抓挠（28 次/天），全程不恢复；测试持续异常检测 |
+| device_sn_4 | 复发（两次发病） | 第 40~55 天、第 120~135 天各发病一次；测试多次发病检测 |
+| device_sn_5 | 渐进性过敏（基线追上） | 三阶段渐进升高（10→15→22 次/天），基线逐步跟上；测试慢性过敏识别 |
+| device_sn_6 | 食物过敏（突发触发） | 第 90 天突然发病，之后持续高位（25 次/天）；测试突发型报警 |
+| device_sn_7 | 跳蚤/螨虫侵扰 | 第 50~80 天极高抓挠（45 次/天），康复后恢复；测试极端异常检测 |
+| device_sn_8 | 季节性过敏（高温度系数） | 温度系数 0.35，高温时抓挠自然升高；测试温度修正防误报 |
+| device_sn_9 | 术后恢复 | 第 30~90 天活动受限（3 次/天），其余正常；测试低活动期基线学习 |
+
+### 设备/数据质量场景（device_sn_10 ~ device_sn_16）
+
+| 设备 | 场景名称 | 说明 |
+|------|---------|------|
+| device_sn_10 | 忘记佩戴（短缺口） | 第 35~37 天未佩戴（3 天缺口）；测试短缺口后基线恢复 |
+| device_sn_11 | 电池耗尽 | 第 40~44 天没电（5 天缺口）；测试中等缺口处理 |
+| device_sn_12 | 长期缺口（>30 天） | 第 30~64 天缺口（35 天）；触发有效天重置，测试基线重建 |
+| device_sn_13 | 信号不稳定 | 第 20~80 天间歇性信号丢失；缺口随机分布，测试断续数据处理 |
+| device_sn_14 | 松动项圈 | 第 50~57 天数据无效（8 天）；data_quality=4，测试无效数据标记 |
+| device_sn_15 | 设备更换 | 第 88~91 天缺口，模拟更换设备；缺口后基线状态重置 |
+| device_sn_16 | 传感器漂移 | 第 70~90 天传感器异常偏高（35 次/天），之后恢复；data_quality=3 |
+
+### 环境场景（device_sn_17 ~ device_sn_20）
+
+| 设备 | 场景名称 | 说明 |
+|------|---------|------|
+| device_sn_17 | 季节转换（明显温度效应） | 温度系数 0.30，整体随季节温度波动；测试高温度系数处理 |
+| device_sn_18 | 搬家（环境突变） | 第 60 天起环境温度整体 +5°C；抓挠略升（13 次/天），基线重新适应 |
+| device_sn_19 | 出行旅游（短缺口+不同环境） | 第 80~89 天缺口（外出旅行）；测试旅行期间数据中断 |
+| device_sn_20 | 高湿度环境 | 整体抓挠基线偏高（14 次/天）；测试个体差异化基线建立 |
+
+### 个体类型场景（device_sn_21 ~ device_sn_24）
+
+| 设备 | 场景名称 | 说明 |
+|------|---------|------|
+| device_sn_21 | 幼犬（基线建立慢） | 热身期延长至 7 天；高活跃度（15 次/天）；测试幼犬个体化配置 |
+| device_sn_22 | 老年犬（低活动） | 极低抓挠基线（5 次/天），温度系数 0.05；测试低活动个体的灵敏度 |
+| device_sn_23 | 高活跃度犬 | 高抓挠基线（20 次/天），温度系数 0.12；测试高活跃个体的异常判断 |
+| device_sn_24 | 低活跃度犬（敏感） | 极低基线（4 次/天），温度系数 0.08；小波动即可触发 z-score 异常 |
+
+---
+
+## 算法说明
+
+所有评估脚本共享相同的算法逻辑：
+
+- **全局随机种子**：环境温湿度数组使用 `seed=42`；信号缺口生成使用 `seed=7`；每个场景的行为数据使用 `seed=42+场景序号`
+- **热身期**：默认前 3 天（device_sn_21 为 7 天），只收集数据，不输出评估结果
+- **动态基线**：EWMA 更新，正常天权重 0.05，异常天权重 0.01，标准差保底 2.0
+- **温度修正**：积累 20 天数据后启用，系数由线性回归估计，上限 0.4
+- **动态阈值**：
+  - 早期（第 4~14 天）：z > 4.0，连续 5 天，均值 z > 5.0
+  - 过渡期（第 15~30 天）：z > 3.5，连续 4 天，均值 z > 4.5
+  - 稳定期（第 31 天+）：z > 2.5，连续 3 天，均值 z > 3.5
+- **缺口处理**：缺口期间基线冻结；恢复后第一天为缓冲天（`data_quality=5`）；缺口 ≥ 30 天则重置有效天计数
