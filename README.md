@@ -151,6 +151,12 @@ curl -sf http://127.0.0.1:6041/rest/sql \
   -u root:taosdata
 ```
 
+**TDengine Explorer（Web UI）**
+
+访问地址：`http://<宿主机IP>:6060/explorer`（例：`http://192.168.2.140:6060/explorer`）
+
+> **首次注册须知**：注册过程必须保证 Explorer 可连接互联网，否则无法注册成功。注册成功后可内网使用，无需再连接互联网。后续登录请使用数据库用户名密码登录（默认：user=`root`，password=`taosdata`）。
+
 ---
 
 ## 数据库说明
