@@ -1,18 +1,32 @@
 version: '3.8'
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: local-mysql8
+  postgres:
+    image: postgres:16
+    container_name: local-postgres16
     restart: always
     ports:
-      - "3306:3306"
+      - "5432:5432"
     env_file: .env
     volumes:
-      - ./mysql-data:/var/lib/mysql
-      - ./mysql-init:/docker-entrypoint-initdb.d
+      - ./postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  tdengine:
+    image: tdengine/tdengine:3.3.4.3
+    container_name: local-tdengine3
+    restart: always
+    ports:
+      - "6030:6030"
+      - "6041:6041"
+    volumes:
+      - ./tdengine-data:/var/lib/taos
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6041/rest/sql -d 'SELECT SERVER_VERSION()' -u root:taosdata"]
+      interval: 10s
+      timeout: 5s
+      retries: 10

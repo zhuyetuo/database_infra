@@ -1,7 +1,7 @@
 """
 宠物项圈皮肤健康监测 — 数据库可视化展示
 ==========================================
-优先从 MySQL 数据库读取数据；数据库不可用时自动切换到内联数据生成
+优先从 PostgreSQL/TDengine 数据库读取数据；数据库不可用时自动切换到内联数据生成
 （内联数据与入库数据算法完全一致，结果等价）
 
 输出 6 张图表到 ./charts/ 目录:
@@ -147,17 +147,18 @@ SC_MAP = {s['sn']: s for s in SCENARIOS}
 # ══════════════════════════════════════════════════════
 #  数据库连接（可选）
 # ══════════════════════════════════════════════════════
-IMU_DB  = 'pet_dog_imu'
-ENV_DB  = 'pet_dog_environment'
-BEH_DB  = 'pet_dog_behavior'
-SKIN_DB = 'pet_dog_skin_assessment'
-BSL_DB  = 'pet_dog_scratch_baseline'
+IMU_DB      = 'pet_dog_imu'
+PG_DB       = 'pet_collar'
+SKIN_SCHEMA = 'pet_dog_skin_assessment'
+BSL_SCHEMA  = 'pet_dog_scratch_baseline'
+TD_HOST     = '127.0.0.1'
+TD_PORT     = 6041
 _DB_AVAILABLE = False
 
 try:
-    import mysql.connector as _mc
-    _test = _mc.connect(host='127.0.0.1', port=3306, user='root',
-                        password='123456', connection_timeout=3)
+    import psycopg2 as _pg
+    _test = _pg.connect(host='127.0.0.1', port=5432, user='postgres',
+                        password='123456', dbname='pet_collar', connect_timeout=3)
     _test.close()
     _DB_AVAILABLE = True
     print('[OK] 数据库连接成功，使用数据库数据')
@@ -165,12 +166,21 @@ except Exception:
     print('[INFO] 数据库不可用，使用内联生成数据（与数据库内容算法一致）')
 
 
-def _db_read(sql: str, db: str) -> pd.DataFrame:
-    conn = _mc.connect(host='127.0.0.1', port=3306, user='root',
-                       password='123456', database=db)
+def _db_read(sql: str) -> pd.DataFrame:
+    conn = _pg.connect(host='127.0.0.1', port=5432, user='postgres',
+                       password='123456', dbname=PG_DB)
     df = pd.read_sql(sql, conn)
     conn.close()
     return df
+
+
+def _td_read(sql: str) -> dict:
+    import requests
+    url  = f"http://{TD_HOST}:{TD_PORT}/rest/sql"
+    resp = requests.post(url, data=sql.encode('utf-8'),
+                         auth=('root', 'taosdata'), timeout=60)
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ══════════════════════════════════════════════════════
@@ -406,18 +416,18 @@ _imu_cache:  dict = {}
 def get_skin(sn: str) -> pd.DataFrame:
     if sn not in _skin_cache:
         if _DB_AVAILABLE:
-            t   = sn.lower()
+            t   = f"{SKIN_SCHEMA}.{sn.lower()}"
             sql = f'''SELECT stat_date AS date,
                         scratch_count, baseline_mean, baseline_std,
                         zscore, avg_zscore, consec_abnormal, eval_phase,
                         threshold_z, threshold_consec,
                         valid_days, is_abnormal, alert_triggered, alert_reason,
                         data_quality,
-                        (data_quality = 0 AND eval_phase = 0) AS in_warmup_flag,
-                        (data_quality IN (1,2,3,4))           AS in_gap_flag,
-                        (data_quality = 5)                    AS just_resumed_flag
-                      FROM `{t}` ORDER BY stat_date'''
-            df = _db_read(sql, SKIN_DB)
+                        (data_quality = 0 AND eval_phase = 0)::int AS in_warmup_flag,
+                        (data_quality IN (1,2,3,4))::int           AS in_gap_flag,
+                        (data_quality = 5)::int                    AS just_resumed_flag
+                      FROM {t} ORDER BY stat_date'''
+            df = _db_read(sql)
             df['date'] = pd.to_datetime(df['date'])
         else:
             sc = SC_MAP[sn]
@@ -432,13 +442,25 @@ def get_imu(sn: str) -> pd.DataFrame:
     if sn not in _imu_cache:
         if _DB_AVAILABLE:
             t   = sn.lower()
-            sql = f'''SELECT DATE(FROM_UNIXTIME(ts_start/1000)) AS date,
-                        AVG(ax) ax_mean, AVG(ay) ay_mean, AVG(az) az_mean,
-                        AVG(gx) gx_mean, AVG(gy) gy_mean, AVG(gz) gz_mean,
-                        COUNT(*) event_count,
-                        SUM(ts_end-ts_start)/60000.0 total_minutes
-                      FROM `{t}` GROUP BY date ORDER BY date'''
-            df = _db_read(sql, IMU_DB)
+            sql = (f"SELECT to_char(to_timestamp(CAST(ts AS BIGINT)/1000), 'YYYY-MM-DD') AS date, "
+                   f"AVG(ax) ax_mean, AVG(ay) ay_mean, AVG(az) az_mean, "
+                   f"AVG(gx) gx_mean, AVG(gy) gy_mean, AVG(gz) gz_mean, "
+                   f"COUNT(*) event_count, "
+                   f"SUM(CAST(ts_end AS BIGINT) - CAST(ts AS BIGINT))/60000.0 total_minutes "
+                   f"FROM {IMU_DB}.{t} "
+                   f"GROUP BY to_char(to_timestamp(CAST(ts AS BIGINT)/1000), 'YYYY-MM-DD') "
+                   f"ORDER BY date")
+            try:
+                result = _td_read(sql)
+                cols   = [c['name'] for c in result.get('column_meta', [])]
+                data   = result.get('data', [])
+                df = pd.DataFrame(data, columns=cols) if data else pd.DataFrame(
+                    columns=['date','ax_mean','ay_mean','az_mean',
+                             'gx_mean','gy_mean','gz_mean','event_count','total_minutes'])
+            except Exception:
+                df = pd.DataFrame(
+                    columns=['date','ax_mean','ay_mean','az_mean',
+                             'gx_mean','gy_mean','gz_mean','event_count','total_minutes'])
             df['date'] = pd.to_datetime(df['date'])
             # behavior column not stored in imu table; derive from pattern (optional placeholder)
             df['behavior'] = 1
@@ -452,13 +474,13 @@ def get_baseline() -> pd.DataFrame:
     if _DB_AVAILABLE:
         rows = []
         for sc in SCENARIOS:
-            t   = sc['sn'].lower()
+            t   = f"{BSL_SCHEMA}.{sc['sn'].lower()}"
             sql = f'''SELECT MAX(stat_date) AS stat_date, baseline_mean, baseline_std,
                              temp_coef, confidence, valid_days
-                      FROM `{t}`
+                      FROM {t}
                       ORDER BY stat_date DESC LIMIT 1'''
             try:
-                df = _db_read(sql, BSL_DB)
+                df = _db_read(sql)
                 if not df.empty:
                     row = df.iloc[0]
                     rows.append({'device_sn': sc['sn'],

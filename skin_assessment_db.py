@@ -1,7 +1,7 @@
 """
-皮肤健康评估数据库
+皮肤健康评估数据库（PostgreSQL）
 =====================
-数据库: pet_dog_skin_assessment
+数据库: pet_collar，模式: pet_dog_skin_assessment
 每个设备独立一张每日评估表: {device_sn}
 
 24 个场景设备（与 imu_raw_db.py 一一对应）
@@ -15,7 +15,7 @@
   - 缺口处理：基线冻结 → 恢复后缓冲天（data_quality=5）→ 缺口≥30天重置门槛
 """
 
-import mysql.connector
+import psycopg2
 import numpy as np
 import math
 from datetime import date, timedelta, datetime, timezone
@@ -23,11 +23,12 @@ from datetime import date, timedelta, datetime, timezone
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
-DB_HOST     = "127.0.0.1"
-DB_PORT     = 3306
-DB_USER     = "root"
-DB_PASSWORD = "123456"
-SKIN_DB     = "pet_dog_skin_assessment"
+PG_HOST     = "127.0.0.1"
+PG_PORT     = 5432
+PG_USER     = "postgres"
+PG_PASSWORD = "123456"
+PG_DB       = "pet_collar"
+SKIN_SCHEMA = "pet_dog_skin_assessment"
 
 DAYS       = 180
 WARMUP     = 3
@@ -332,7 +333,7 @@ def to_ts(d: date) -> int:
 
 
 def tbl(sn: str) -> str:
-    return sn.lower()
+    return f"{SKIN_SCHEMA}.{sn.lower()}"
 
 
 # ══════════════════════════════════════════════════════
@@ -492,66 +493,49 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
 #  数据库操作
 # ══════════════════════════════════════════════════════
 
-def get_conn(database: str = None):
-    cfg = dict(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD)
-    if database:
-        cfg['database'] = database
-    return mysql.connector.connect(**cfg)
+def get_conn():
+    return psycopg2.connect(
+        host=PG_HOST, port=PG_PORT, user=PG_USER,
+        password=PG_PASSWORD, dbname=PG_DB
+    )
 
 
-def create_database():
+def create_schema():
     conn   = get_conn()
     cursor = conn.cursor()
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{SKIN_DB}` "
-                   f"DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
+    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {SKIN_SCHEMA}")
     conn.commit()
     cursor.close()
     conn.close()
-    print(f"[OK] 数据库 {SKIN_DB} 已就绪")
+    print(f"[OK] 模式 {SKIN_SCHEMA} 已就绪")
 
 
 def create_table(conn, sn: str):
     t = tbl(sn)
     cursor = conn.cursor()
     cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS `{t}` (
-          `stat_date`        date          NOT NULL
-                             COMMENT '统计日期',
-          `scratch_count`    int           NOT NULL DEFAULT 0
-                             COMMENT '当日抓挠总次数',
-          `baseline_mean`    decimal(6,2)  DEFAULT NULL
-                             COMMENT '个体基线均值 次/天',
-          `baseline_std`     decimal(6,2)  DEFAULT NULL
-                             COMMENT '个体基线标准差',
-          `zscore`           decimal(6,2)  DEFAULT NULL
-                             COMMENT '温度修正后 z-score',
-          `avg_zscore`       decimal(6,2)  DEFAULT NULL
-                             COMMENT '近N天均值 z-score',
-          `consec_abnormal`  int           NOT NULL DEFAULT 0
-                             COMMENT '当前连续异常天数',
-          `eval_phase`       tinyint       NOT NULL DEFAULT 0
-                             COMMENT '评估阶段(0:热身期 1:早期 2:过渡期 3:稳定期)',
-          `threshold_z`      decimal(4,2)  DEFAULT NULL
-                             COMMENT '当日 z-score 门槛',
-          `threshold_consec` tinyint       DEFAULT NULL
-                             COMMENT '当日连续天数门槛',
-          `is_abnormal`      tinyint(1)    NOT NULL DEFAULT 0
-                             COMMENT '当日是否异常(0=正常 1=异常)',
-          `alert_triggered`  tinyint(1)    NOT NULL DEFAULT 0
-                             COMMENT '是否触发报警(0=无 1=报警)',
-          `alert_reason`     varchar(256)  DEFAULT NULL
-                             COMMENT '报警原因描述',
-          `data_quality`     tinyint       NOT NULL DEFAULT 0
-                             COMMENT '数据质量(0=正常 1=未佩戴 2=没电 3=信号丢失 4=松动 5=缓冲天)',
-          `wear_minutes`     int           NOT NULL DEFAULT 0
-                             COMMENT '有效佩戴分钟数',
-          PRIMARY KEY (`stat_date`),
-          KEY `idx_abnormal` (`is_abnormal`,    `stat_date`),
-          KEY `idx_alert`    (`alert_triggered`, `stat_date`),
-          KEY `idx_quality`  (`data_quality`,    `stat_date`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
-          COMMENT='设备 {sn} 皮肤健康每日评估结果（场景模拟）';
+        CREATE TABLE IF NOT EXISTS {t} (
+          stat_date        date          NOT NULL,
+          scratch_count    int           NOT NULL DEFAULT 0,
+          baseline_mean    decimal(6,2)  DEFAULT NULL,
+          baseline_std     decimal(6,2)  DEFAULT NULL,
+          zscore           decimal(6,2)  DEFAULT NULL,
+          avg_zscore       decimal(6,2)  DEFAULT NULL,
+          consec_abnormal  int           NOT NULL DEFAULT 0,
+          eval_phase       SMALLINT      NOT NULL DEFAULT 0,
+          threshold_z      decimal(4,2)  DEFAULT NULL,
+          threshold_consec SMALLINT      DEFAULT NULL,
+          is_abnormal      SMALLINT      NOT NULL DEFAULT 0,
+          alert_triggered  SMALLINT      NOT NULL DEFAULT 0,
+          alert_reason     VARCHAR(256)  DEFAULT NULL,
+          data_quality     SMALLINT      NOT NULL DEFAULT 0,
+          wear_minutes     int           NOT NULL DEFAULT 0,
+          PRIMARY KEY (stat_date)
+        )
     """)
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_abn ON {t} (is_abnormal, stat_date)")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_alt ON {t} (alert_triggered, stat_date)")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_dq  ON {t} (data_quality, stat_date)")
     conn.commit()
     cursor.close()
     print(f"  [OK] 表 {t} 已就绪")
@@ -564,15 +548,16 @@ def insert_rows(conn, sn: str, rows: list):
 
     t   = tbl(sn)
     sql = f"""
-        INSERT IGNORE INTO `{t}`
-          (`stat_date`, `scratch_count`,
-           `baseline_mean`, `baseline_std`,
-           `zscore`, `avg_zscore`,
-           `consec_abnormal`, `eval_phase`,
-           `threshold_z`, `threshold_consec`,
-           `is_abnormal`, `alert_triggered`, `alert_reason`,
-           `data_quality`, `wear_minutes`)
+        INSERT INTO {t}
+          (stat_date, scratch_count,
+           baseline_mean, baseline_std,
+           zscore, avg_zscore,
+           consec_abnormal, eval_phase,
+           threshold_z, threshold_consec,
+           is_abnormal, alert_triggered, alert_reason,
+           data_quality, wear_minutes)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (stat_date) DO NOTHING
     """
     cursor = conn.cursor()
     cursor.executemany(sql, rows)
@@ -586,7 +571,7 @@ def insert_rows(conn, sn: str, rows: list):
 # ══════════════════════════════════════════════════════
 
 def query_summary():
-    conn   = get_conn(SKIN_DB)
+    conn   = get_conn()
     cursor = conn.cursor()
 
     print("\n======= 各设备每日评估概况 =======")
@@ -595,16 +580,15 @@ def query_summary():
         try:
             cursor.execute(f"""
                 SELECT
-                    COUNT(*)                                         AS 总天数,
-                    SUM(data_quality = 0 AND eval_phase = 0)        AS 热身期,
-                    SUM(data_quality IN (1,2,3,4))                  AS 缺口天,
-                    SUM(data_quality = 5)                           AS 缓冲天,
-                    SUM(is_abnormal)                                 AS 异常天,
-                    SUM(alert_triggered)                             AS 推送次数,
-                    ROUND(AVG(CASE WHEN data_quality=0
-                              THEN scratch_count END), 1)           AS 日均抓挠,
-                    ROUND(MAX(zscore), 2)                            AS 最高z_score
-                FROM `{t}`
+                    COUNT(*)                                                     AS 总天数,
+                    SUM(CASE WHEN data_quality = 0 AND eval_phase = 0 THEN 1 ELSE 0 END) AS 热身期,
+                    SUM(CASE WHEN data_quality IN (1,2,3,4) THEN 1 ELSE 0 END)  AS 缺口天,
+                    SUM(CASE WHEN data_quality = 5 THEN 1 ELSE 0 END)           AS 缓冲天,
+                    SUM(is_abnormal)                                             AS 异常天,
+                    SUM(alert_triggered)                                         AS 推送次数,
+                    ROUND(AVG(CASE WHEN data_quality=0 THEN scratch_count END)::numeric, 1) AS 日均抓挠,
+                    ROUND(MAX(zscore)::numeric, 2)                               AS 最高z_score
+                FROM {t}
             """)
             row = cursor.fetchone()
             print(f"  {sc['sn']:20s}  "
@@ -623,7 +607,7 @@ def query_summary():
                 SELECT
                     stat_date, scratch_count, zscore, avg_zscore,
                     consec_abnormal, alert_reason
-                FROM `{t}`
+                FROM {t}
                 WHERE alert_triggered = 1
                 ORDER BY stat_date
             """)
@@ -648,10 +632,10 @@ def query_summary():
 # ══════════════════════════════════════════════════════
 
 def main():
-    print("=== 第一步：创建数据库 ===")
-    create_database()
+    print("=== 第一步：创建模式 ===")
+    create_schema()
 
-    conn = get_conn(SKIN_DB)
+    conn = get_conn()
 
     print("\n=== 第二步：建表 ===")
     for sc in SCENARIOS:

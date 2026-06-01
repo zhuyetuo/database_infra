@@ -1,34 +1,40 @@
 #!/bin/bash
-# 重置数据库并重新写入所有模拟数据
-
 set -e
 
-MYSQL_CMD="docker exec local-mysql8 mysql -uroot -p123456"
+PG_CMD="docker exec local-postgres16 psql -U postgres -d pet_collar"
+TD_URL="http://127.0.0.1:6041/rest/sql"
+TD_AUTH="-u root:taosdata"
 
-echo "=== 1. 重启 MySQL 容器 ==="
-docker restart local-mysql8
+echo "=== 1. 重启容器 ==="
+docker restart local-postgres16 local-tdengine3
 
-echo "=== 2. 等待 MySQL 就绪 ==="
-until $MYSQL_CMD -e "SELECT 1" > /dev/null 2>&1; do
+echo "=== 2. 等待 PostgreSQL 就绪 ==="
+until docker exec local-postgres16 pg_isready -U postgres -d pet_collar > /dev/null 2>&1; do
     echo "  等待中..."
     sleep 2
 done
-echo "  MySQL 已就绪"
+echo "  PostgreSQL 已就绪"
 
-echo "=== 3. 删除旧库 ==="
-$MYSQL_CMD -e "
-    DROP DATABASE IF EXISTS pet_dog_imu;
-    DROP DATABASE IF EXISTS pet_dog_environment;
-    DROP DATABASE IF EXISTS pet_dog_behavior;
-    DROP DATABASE IF EXISTS pet_dog_skin_assessment;
-    DROP DATABASE IF EXISTS pet_dog_scratch_baseline;
-    DROP DATABASE IF EXISTS pet_dog_skin;
-    DROP DATABASE IF EXISTS pet_imu;
-    DROP DATABASE IF EXISTS pet_skin_health;
+echo "=== 3. 等待 TDengine 就绪 ==="
+until curl -sf $TD_URL -d "SELECT 1" $TD_AUTH > /dev/null 2>&1; do
+    echo "  等待中..."
+    sleep 2
+done
+echo "  TDengine 已就绪"
+
+echo "=== 4. 删除旧数据 ==="
+$PG_CMD -c "
+    DROP SCHEMA IF EXISTS pet_dog_environment    CASCADE;
+    DROP SCHEMA IF EXISTS pet_dog_behavior       CASCADE;
+    DROP SCHEMA IF EXISTS pet_dog_skin_assessment CASCADE;
+    DROP SCHEMA IF EXISTS pet_dog_scratch_baseline CASCADE;
+    DROP SCHEMA IF EXISTS pet_device             CASCADE;
 " 2>/dev/null || true
-echo "  旧库已清除"
 
-echo "=== 4. 写入模拟数据 ==="
+curl -sf $TD_URL -d "DROP DATABASE IF EXISTS pet_dog_imu" $TD_AUTH > /dev/null || true
+echo "  旧数据已清除"
+
+echo "=== 5. 写入模拟数据 ==="
 python imu_raw_db.py
 python environment_db.py
 python behavior_db.py
