@@ -243,34 +243,44 @@ def pg_init():
 #  IMU sample generator
 # ============================================================
 
+ACC_MAX  =  78.46   # m/s²  (~±8g)
+GYRO_MAX =  17.87   # rad/s (~±1024 °/s)
+
+def _clip_imu(ax, ay, az, gx, gy, gz) -> tuple:
+    c = lambda v, m: round(float(np.clip(v, -m, m)), 2)
+    return (c(ax, ACC_MAX), c(ay, ACC_MAX), c(az, ACC_MAX),
+            c(gx, GYRO_MAX), c(gy, GYRO_MAX), c(gz, GYRO_MAX))
+
 def _imu_sample(behavior: int, si: float = 1.0) -> tuple:
-    """Return (ax, ay, az, gx, gy, gz) for one sample."""
+    """Return (ax, ay, az, gx, gy, gz) for one sample. Units: m/s², rad/s."""
     if behavior == BEHAVIOR_SLEEP:
-        return (
-            round(float(np.random.normal(0,   20)),  2),
-            round(float(np.random.normal(0,   15)),  2),
-            round(float(np.random.normal(980, 25)),  2),
-            round(float(np.random.normal(0,   2)),   2),
-            round(float(np.random.normal(0,   2)),   2),
-            round(float(np.random.normal(0,   1.5)), 2),
+        # Nearly still; az ≈ +9.8 m/s² (gravity), minimal rotation
+        return _clip_imu(
+            np.random.normal(0,    0.3),
+            np.random.normal(0,    0.3),
+            np.random.normal(9.8,  0.4),
+            np.random.normal(0,    0.05),
+            np.random.normal(0,    0.05),
+            np.random.normal(0,    0.04),
         )
     elif behavior == BEHAVIOR_MOVE:
-        return (
-            round(float(np.random.normal(40,  150)), 2),
-            round(float(np.random.normal(20,  120)), 2),
-            round(float(np.random.normal(650, 280)), 2),
-            round(float(np.random.normal(0,   90)),  2),
-            round(float(np.random.normal(0,   70)),  2),
-            round(float(np.random.normal(0,   55)),  2),
+        # Walking/trotting: moderate acc variance, noticeable rotation
+        return _clip_imu(
+            np.random.normal(0,   4.0),
+            np.random.normal(0,   3.5),
+            np.random.normal(9.8, 5.0),
+            np.random.normal(0,   1.5),
+            np.random.normal(0,   1.2),
+            np.random.normal(0,   1.0),
         )
-    else:  # SCRATCH
-        return (
-            round(float(np.random.normal(180 * si, 80)),  2),
-            round(float(np.random.normal(40,        60)),  2),
-            round(float(np.random.normal(800,       180)), 2),
-            round(float(np.random.normal(0, 130 * si)),    2),
-            round(float(np.random.normal(0,  90)),          2),
-            round(float(np.random.normal(0,  70)),          2),
+    else:  # SCRATCH — rapid limb movement, intensity scaled by si
+        return _clip_imu(
+            np.random.normal(0,  12.0 * si),
+            np.random.normal(0,   8.0 * si),
+            np.random.normal(9.8, 6.0 * si),
+            np.random.normal(0,   5.0 * si),
+            np.random.normal(0,   4.0 * si),
+            np.random.normal(0,   3.5 * si),
         )
 
 
