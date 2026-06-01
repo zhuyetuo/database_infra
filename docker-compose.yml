@@ -23,6 +23,7 @@ services:
     ports:
       - "6030:6030"
       - "6041:6041"
+      - "6060:6060"
     volumes:
       - ./tdengine-data:/var/lib/taos
     healthcheck:
