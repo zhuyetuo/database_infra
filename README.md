@@ -1,22 +1,23 @@
-# mysql_infra
+# database_infra
 
-本地 MySQL 8.0 测试环境，仅用于宠物项圈皮肤健康监测算法的数据模拟与验证。
+本地 PostgreSQL 16 + TDengine 3 测试环境，仅用于宠物项圈皮肤健康监测算法的数据模拟与验证。
 
 ---
 
 ## 目录结构
 
 ```
-mysql_infra/
-├── docker-compose.yml        # MySQL 容器配置
-├── .env                      # 环境变量（密码、默认库名）
-├── mysql-data/               # 数据持久化目录（自动创建）
-├── mysql-init/               # 初始化 SQL 脚本目录（可选）
-├── imu_raw_db.py             # 创建 pet_dog_imu 库 + 生成 IMU 原始事件数据
-├── environment_db.py         # 创建 pet_dog_environment 库 + 生成环境传感器数据
-├── behavior_db.py            # 创建 pet_dog_behavior 库 + 生成行为识别事件数据
-├── skin_assessment_db.py     # 创建 pet_dog_skin_assessment 库 + 生成皮肤健康评估数据
-├── scratch_baseline_db.py    # 创建 pet_dog_scratch_baseline 库 + 生成抓挠基线快照数据
+database_infra/
+├── docker-compose.yml        # PostgreSQL + TDengine 容器配置
+├── .env                      # 环境变量（PostgreSQL 密码、默认库名）
+├── postgres-data/            # PostgreSQL 数据持久化目录（自动创建）
+├── tdengine-data/            # TDengine 数据持久化目录（自动创建）
+├── imu_raw_db.py             # 创建 pet_dog_imu 库（TDengine）+ 生成 IMU 原始事件数据
+├── environment_db.py         # 创建 pet_dog_environment 模式（PostgreSQL）+ 生成环境传感器数据
+├── behavior_db.py            # 创建 pet_dog_behavior 模式（PostgreSQL）+ 生成行为识别事件数据
+├── skin_assessment_db.py     # 创建 pet_dog_skin_assessment 模式（PostgreSQL）+ 生成皮肤健康评估数据
+├── scratch_baseline_db.py    # 创建 pet_dog_scratch_baseline 模式（PostgreSQL）+ 生成抓挠基线快照数据
+├── skin_health_db.py         # 创建 pet_device 模式（PostgreSQL）+ 生成综合皮肤健康日报数据
 ├── visualize_db.py           # 从数据库读取数据，生成 6 张可视化图表
 └── charts/                   # 可视化输出图片目录
 ```
@@ -31,7 +32,7 @@ mysql_infra/
 docker-compose up -d
 ```
 
-等待容器健康检查通过（约 20 秒）：
+等待容器健康检查通过（约 30 秒）：
 
 ```bash
 docker ps
@@ -43,17 +44,23 @@ docker ps
 按顺序执行（各脚本可独立运行，互不依赖）：
 
 ```bash
-python imu_raw_db.py            # 写入 pet_dog_imu（IMU 原始事件）
-python environment_db.py        # 写入 pet_dog_environment（环境传感器）
-python behavior_db.py           # 写入 pet_dog_behavior（行为识别事件）
-python skin_assessment_db.py    # 写入 pet_dog_skin_assessment（皮肤健康评估）
-python scratch_baseline_db.py   # 写入 pet_dog_scratch_baseline（抓挠基线快照）
+python imu_raw_db.py            # 写入 pet_dog_imu（IMU 原始事件，TDengine）
+python environment_db.py        # 写入 pet_dog_environment（环境传感器，PostgreSQL）
+python behavior_db.py           # 写入 pet_dog_behavior（行为识别事件，PostgreSQL）
+python skin_assessment_db.py    # 写入 pet_dog_skin_assessment（皮肤健康评估，PostgreSQL）
+python scratch_baseline_db.py   # 写入 pet_dog_scratch_baseline（抓挠基线快照，PostgreSQL）
+```
+
+或使用重置脚本（会重启容器并清除旧数据）：
+
+```bash
+bash reset_and_load.sh
 ```
 
 ### 3. 生成可视化图表
 
 ```bash
-pip install matplotlib pandas   # 首次需安装
+pip install matplotlib pandas psycopg2-binary requests   # 首次需安装
 python visualize_db.py          # 图表输出到 ./charts/
 ```
 
@@ -74,36 +81,63 @@ python visualize_db.py          # 图表输出到 ./charts/
 
 ## 连接信息
 
+### PostgreSQL
+
 ```
 host:     127.0.0.1
-port:     3306
-user:     root
+port:     5432
+user:     postgres
 password: 123456
+database: pet_collar
+```
+
+### TDengine
+
+```
+host:     127.0.0.1
+port:     6041 (REST API)
+port:     6030 (native)
+user:     root
+password: taosdata
+database: pet_dog_imu
+```
+
+连接 TDengine REST API 示例：
+
+```bash
+curl -sf http://127.0.0.1:6041/rest/sql \
+  -d 'SHOW DATABASES' \
+  -u root:taosdata
 ```
 
 ---
 
 ## 数据库说明
 
-### 1. `pet_dog_imu` — IMU 原始事件库
+### 架构设计
 
-每个设备一张独立表（`device_sn_1` ~ `device_sn_24`），每行为一次连续行为片段的 IMU 特征摘要。
+- **TDengine** (`pet_dog_imu`): 存储高频 IMU 6轴传感器原始事件数据，利用时序数据库的超级表机制按设备分子表
+- **PostgreSQL** (`pet_collar`): 存储所有经过算法处理的结构化数据，按功能域分模式（schema）
 
-共 24 张表，每张表约 2000~4000 行（180 天 × 每天若干事件）。
+### 1. TDengine — `pet_dog_imu`（IMU 原始事件）
+
+超级表 `imu_events`，每个设备一张子表（`device_sn_1` ~ `device_sn_24`），每行为一次连续行为片段的 IMU 特征摘要。
+
+共 24 张子表，每张表约 2000~4000 行（180 天 × 每天若干事件）。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `id` | BIGINT | 自增主键 |
-| `ts_start` | BIGINT | 行为开始时间（UTC ms） |
+| `ts` | TIMESTAMP | 行为开始时间（UTC ms，主键） |
 | `ts_end` | BIGINT | 行为结束时间（UTC ms） |
-| `ax` | DECIMAL(8,2) | 加速度 X 轴均值（mg） |
-| `ay` | DECIMAL(8,2) | 加速度 Y 轴均值（mg） |
-| `az` | DECIMAL(8,2) | 加速度 Z 轴均值（mg，重力方向） |
-| `gx` | DECIMAL(8,2) | 陀螺仪 X 轴均值（deg/s） |
-| `gy` | DECIMAL(8,2) | 陀螺仪 Y 轴均值（deg/s） |
-| `gz` | DECIMAL(8,2) | 陀螺仪 Z 轴均值（deg/s） |
+| `ax` | FLOAT | 加速度 X 轴均值（mg） |
+| `ay` | FLOAT | 加速度 Y 轴均值（mg） |
+| `az` | FLOAT | 加速度 Z 轴均值（mg，重力方向） |
+| `gx` | FLOAT | 陀螺仪 X 轴均值（deg/s） |
+| `gy` | FLOAT | 陀螺仪 Y 轴均值（deg/s） |
+| `gz` | FLOAT | 陀螺仪 Z 轴均值（deg/s） |
+| `device_sn` | BINARY(32) | 设备序列号（TAG） |
 
-### 2. `pet_dog_environment` — 环境传感器库
+### 2. PostgreSQL 模式 `pet_dog_environment`（环境传感器）
 
 每个设备一张独立表，每行为一天一条传感器采样记录。
 
@@ -111,13 +145,13 @@ password: 123456
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `id` | BIGINT | 自增主键 |
+| `id` | BIGSERIAL | 自增主键 |
 | `ts` | BIGINT | 采样日 UTC 零点（ms） |
-| `neck_temp` | DECIMAL(5,2) | 脖颈温度 °C（炎症期偏高；缺口天为 NULL） |
-| `env_temp` | DECIMAL(5,1) | 环境温度 °C（全局共享序列） |
-| `env_humidity` | DECIMAL(5,1) | 环境湿度 %（全局共享序列） |
+| `neck_temp` | NUMERIC(5,2) | 脖颈温度 °C（炎症期偏高；缺口天为 NULL） |
+| `env_temp` | NUMERIC(5,1) | 环境温度 °C（全局共享序列） |
+| `env_humidity` | NUMERIC(5,1) | 环境湿度 %（全局共享序列） |
 
-### 3. `pet_dog_behavior` — 行为识别事件库
+### 3. PostgreSQL 模式 `pet_dog_behavior`（行为识别事件）
 
 每个设备一张独立表，每行为 ML 模型输出的一次行为识别事件。
 
@@ -125,14 +159,14 @@ password: 123456
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `id` | BIGINT | 自增主键 |
+| `id` | BIGSERIAL | 自增主键 |
 | `ts_start` | BIGINT | 行为开始时间（UTC ms） |
 | `ts_end` | BIGINT | 行为结束时间（UTC ms） |
-| `behavior` | TINYINT | 行为类型：1=运动  2=睡眠  3=抓挠 |
-| `duration_sec` | DECIMAL(10,2) | 持续时长（秒） |
-| `confidence` | DECIMAL(5,3) | 模型置信度（0.000~1.000） |
+| `behavior` | SMALLINT | 行为类型：1=运动  2=睡眠  3=抓挠 |
+| `duration_sec` | NUMERIC(10,2) | 持续时长（秒） |
+| `confidence` | NUMERIC(5,3) | 模型置信度（0.000~1.000） |
 
-### 4. `pet_dog_skin_assessment` — 皮肤健康评估库
+### 4. PostgreSQL 模式 `pet_dog_skin_assessment`（皮肤健康评估）
 
 每个设备一张独立表，每行为一天的评估结果，由 EWMA 动态基线 + z-score 算法生成。
 
@@ -147,16 +181,16 @@ password: 123456
 | `zscore` | DECIMAL(6,2) | 温度修正后 z-score |
 | `avg_zscore` | DECIMAL(6,2) | 近 N 天均值 z-score |
 | `consec_abnormal` | INT | 当前连续异常天数 |
-| `eval_phase` | TINYINT | 评估阶段：0=热身期  1=早期  2=过渡期  3=稳定期 |
+| `eval_phase` | SMALLINT | 评估阶段：0=热身期  1=早期  2=过渡期  3=稳定期 |
 | `threshold_z` | DECIMAL(4,2) | 当日 z-score 门槛 |
-| `threshold_consec` | TINYINT | 当日连续天数门槛 |
-| `is_abnormal` | TINYINT(1) | 当日是否异常（0=正常  1=异常） |
-| `alert_triggered` | TINYINT(1) | 是否触发报警（0=无  1=报警） |
+| `threshold_consec` | SMALLINT | 当日连续天数门槛 |
+| `is_abnormal` | SMALLINT | 当日是否异常（0=正常  1=异常） |
+| `alert_triggered` | SMALLINT | 是否触发报警（0=无  1=报警） |
 | `alert_reason` | VARCHAR(256) | 报警原因描述 |
-| `data_quality` | TINYINT | 数据质量：0=正常  1=未佩戴  2=没电  3=信号丢失  4=松动  5=缓冲天 |
+| `data_quality` | SMALLINT | 数据质量：0=正常  1=未佩戴  2=没电  3=信号丢失  4=松动  5=缓冲天 |
 | `wear_minutes` | INT | 有效佩戴分钟数 |
 
-### 5. `pet_dog_scratch_baseline` — 抓挠基线快照库
+### 5. PostgreSQL 模式 `pet_dog_scratch_baseline`（抓挠基线快照）
 
 每个设备一张独立表，每行为当天算法运行后的基线状态快照。缺口天不保存快照。
 

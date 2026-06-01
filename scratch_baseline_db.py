@@ -1,7 +1,7 @@
 """
-抓挠基线数据库
+抓挠基线数据库（PostgreSQL）
 =====================
-数据库: pet_dog_scratch_baseline
+数据库: pet_collar，模式: pet_dog_scratch_baseline
 每个设备独立一张表: {device_sn}
 
 每行 = 当天算法运行后的基线快照
@@ -13,7 +13,7 @@
   valid_days     参与计算的有效正常天数
 """
 
-import mysql.connector
+import psycopg2
 import numpy as np
 import math
 from datetime import date, timedelta, datetime, timezone
@@ -21,11 +21,12 @@ from datetime import date, timedelta, datetime, timezone
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
-DB_HOST     = "127.0.0.1"
-DB_PORT     = 3306
-DB_USER     = "root"
-DB_PASSWORD = "123456"
-BSL_DB      = "pet_dog_scratch_baseline"
+PG_HOST     = "127.0.0.1"
+PG_PORT     = 5432
+PG_USER     = "postgres"
+PG_PASSWORD = "123456"
+PG_DB       = "pet_collar"
+BSL_SCHEMA  = "pet_dog_scratch_baseline"
 
 DAYS       = 180
 WARMUP     = 3
@@ -311,7 +312,7 @@ def to_date(d: date) -> str:
 
 
 def tbl(sn: str) -> str:
-    return sn.lower()
+    return f"{BSL_SCHEMA}.{sn.lower()}"
 
 
 # ══════════════════════════════════════════════════════
@@ -428,44 +429,36 @@ def build_baseline_rows(sc: dict, seed: int = 42) -> list:
 #  数据库操作
 # ══════════════════════════════════════════════════════
 
-def get_conn(database: str = None):
-    cfg = dict(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD)
-    if database:
-        cfg['database'] = database
-    return mysql.connector.connect(**cfg)
+def get_conn():
+    return psycopg2.connect(
+        host=PG_HOST, port=PG_PORT, user=PG_USER,
+        password=PG_PASSWORD, dbname=PG_DB
+    )
 
 
-def create_database():
+def create_schema():
     conn   = get_conn()
     cursor = conn.cursor()
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{BSL_DB}` "
-                   f"DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
+    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {BSL_SCHEMA}")
     conn.commit()
     cursor.close()
     conn.close()
-    print(f"[OK] 数据库 {BSL_DB} 已就绪")
+    print(f"[OK] 模式 {BSL_SCHEMA} 已就绪")
 
 
 def create_table(conn, sn: str):
     t = tbl(sn)
     cursor = conn.cursor()
     cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS `{t}` (
-          `stat_date`     date          NOT NULL
-                          COMMENT '统计日期',
-          `baseline_mean` decimal(6,2)  NOT NULL
-                          COMMENT '基线均值 次/天',
-          `baseline_std`  decimal(6,2)  NOT NULL
-                          COMMENT '基线标准差',
-          `temp_coef`     decimal(5,3)  NOT NULL DEFAULT 0.000
-                          COMMENT '温度修正系数 次/°C',
-          `confidence`    decimal(4,2)  NOT NULL DEFAULT 0.00
-                          COMMENT '基线置信度 0.00-1.00',
-          `valid_days`    int           NOT NULL DEFAULT 0
-                          COMMENT '参与计算的有效正常天数',
-          PRIMARY KEY (`stat_date`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
-          COMMENT='设备 {sn} 抓挠基线每日快照（场景模拟）';
+        CREATE TABLE IF NOT EXISTS {t} (
+          stat_date     date          NOT NULL,
+          baseline_mean decimal(6,2)  NOT NULL,
+          baseline_std  decimal(6,2)  NOT NULL,
+          temp_coef     decimal(5,3)  NOT NULL DEFAULT 0.000,
+          confidence    decimal(4,2)  NOT NULL DEFAULT 0.00,
+          valid_days    int           NOT NULL DEFAULT 0,
+          PRIMARY KEY (stat_date)
+        )
     """)
     conn.commit()
     cursor.close()
@@ -479,10 +472,11 @@ def insert_rows(conn, sn: str, rows: list):
 
     t   = tbl(sn)
     sql = f"""
-        INSERT IGNORE INTO `{t}`
-          (`stat_date`, `baseline_mean`, `baseline_std`,
-           `temp_coef`, `confidence`, `valid_days`)
+        INSERT INTO {t}
+          (stat_date, baseline_mean, baseline_std,
+           temp_coef, confidence, valid_days)
         VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (stat_date) DO NOTHING
     """
     cursor = conn.cursor()
     cursor.executemany(sql, rows)
@@ -496,7 +490,7 @@ def insert_rows(conn, sn: str, rows: list):
 # ══════════════════════════════════════════════════════
 
 def query_summary():
-    conn   = get_conn(BSL_DB)
+    conn   = get_conn()
     cursor = conn.cursor()
 
     print("\n======= 基线快照概况 =======")
@@ -507,13 +501,13 @@ def query_summary():
                 SELECT
                     COUNT(*)                        AS total,
                     MAX(valid_days)                 AS max_valid_days,
-                    ROUND(MAX(confidence), 2)       AS max_conf,
-                    ROUND(AVG(baseline_mean), 2)    AS avg_mean,
-                    ROUND(AVG(baseline_std), 2)     AS avg_std,
-                    ROUND(AVG(temp_coef), 3)        AS avg_coef,
+                    ROUND(MAX(confidence)::numeric, 2)    AS max_conf,
+                    ROUND(AVG(baseline_mean)::numeric, 2) AS avg_mean,
+                    ROUND(AVG(baseline_std)::numeric, 2)  AS avg_std,
+                    ROUND(AVG(temp_coef)::numeric, 3)     AS avg_coef,
                     MIN(stat_date)                  AS earliest,
                     MAX(stat_date)                  AS latest
-                FROM `{t}`
+                FROM {t}
             """)
             row = cursor.fetchone()
             print(f"  {sc['sn']:20s}  快照={int(row[0]):3d}天  "
@@ -532,10 +526,10 @@ def query_summary():
 # ══════════════════════════════════════════════════════
 
 def main():
-    print("=== 第一步：创建数据库 ===")
-    create_database()
+    print("=== 第一步：创建模式 ===")
+    create_schema()
 
-    conn = get_conn(BSL_DB)
+    conn = get_conn()
 
     print("\n=== 第二步：建表 ===")
     for sc in SCENARIOS:

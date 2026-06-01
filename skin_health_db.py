@@ -1,4 +1,4 @@
-import mysql.connector
+import psycopg2
 import numpy as np
 import math
 from datetime import date, timedelta, datetime, timezone
@@ -6,66 +6,70 @@ from datetime import date, timedelta, datetime, timezone
 # ======================================
 # 数据库连接配置
 # ======================================
-DB_CONFIG = {
-    # "host":     "127.0.0.1",
-    "host":     "192.168.2.140",
-    "port":     3306,
-    "user":     "root",
-    "password": "123456",
-    "database": "pet_device"
-}
+PG_HOST     = "127.0.0.1"
+PG_PORT     = 5432
+PG_USER     = "postgres"
+PG_PASSWORD = "123456"
+PG_DB       = "pet_collar"
+PG_SCHEMA   = "pet_device"
 
 # ======================================
 # 1. 建表
 # ======================================
+def get_conn():
+    return psycopg2.connect(
+        host=PG_HOST, port=PG_PORT, user=PG_USER,
+        password=PG_PASSWORD, dbname=PG_DB
+    )
+
+
 def create_table():
-    conn   = mysql.connector.connect(**DB_CONFIG)
+    conn   = get_conn()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS `pet_skin_health_daily` (
-          `device_sn`           varchar(64)   NOT NULL        COMMENT '设备序列号',
-          `stat_date_ts`        bigint        NOT NULL        COMMENT '统计日期本地零点 UTC 时间戳(ms)，由后端按用户时区转换后传入',
-          `scratch_count`       smallint      NOT NULL DEFAULT 0  COMMENT '当日抓挠总次数',
-          `scratch_duration`    int           NOT NULL DEFAULT 0  COMMENT '当日抓挠总时长(ms)',
-          `scratch_avg_dur`     int           NOT NULL DEFAULT 0  COMMENT '单次平均时长(ms)',
-          `scratch_max_dur`     int           NOT NULL DEFAULT 0  COMMENT '单次最长时长(ms)',
-          `night_scratch_count` smallint      NOT NULL DEFAULT 0  COMMENT '夜间抓挠次数(22:00-06:00)',
-          `avg_temperature`     decimal(4,1)  DEFAULT NULL    COMMENT '当日平均温度(°C)',
-          `avg_humidity`        decimal(4,1)  DEFAULT NULL    COMMENT '当日平均湿度(%)',
-          `baseline_mean`       decimal(6,2)  DEFAULT NULL    COMMENT '个体基线均值(次/天)',
-          `baseline_std`        decimal(6,2)  DEFAULT NULL    COMMENT '个体基线标准差',
-          `temp_coef`           decimal(5,3)  DEFAULT NULL    COMMENT '温度修正系数(次/°C)',
-          `temp_effect`         decimal(5,2)  DEFAULT NULL    COMMENT '当日温度效应(次)',
-          `zscore`              decimal(6,2)  DEFAULT NULL    COMMENT '温度修正后z-score',
-          `avg_zscore`          decimal(6,2)  DEFAULT NULL    COMMENT '近N天均值z-score',
-          `consec_abnormal`     tinyint       NOT NULL DEFAULT 0  COMMENT '当前连续异常天数',
-          `eval_phase`          tinyint       NOT NULL DEFAULT 0
-                                COMMENT '评估阶段(0:热身期 1:早期4-14天 2:过渡期15-30天 3:稳定期31天+)',
-          `threshold_z`         decimal(4,2)  DEFAULT NULL    COMMENT '当日z-score门槛',
-          `threshold_consec`    tinyint       DEFAULT NULL    COMMENT '当日连续天数门槛',
-          `threshold_avgz`      decimal(4,2)  DEFAULT NULL    COMMENT '当日均值z门槛',
-          `valid_days`          smallint      NOT NULL DEFAULT 0  COMMENT '有效数据累计天数',
-          `is_abnormal`         tinyint(1)    NOT NULL DEFAULT 0  COMMENT '当日是否异常(1=是)',
-          `alert_triggered`     tinyint(1)    NOT NULL DEFAULT 0  COMMENT '是否触发推送(1=是)',
-          `alert_reason`        varchar(128)  DEFAULT NULL    COMMENT '触发原因描述',
-          `data_quality`        tinyint       NOT NULL DEFAULT 0
-                                COMMENT '数据质量(0:正常 1:未佩戴 2:没电 3:信号丢失 4:松动无效 5:缓冲天)',
-          `wear_minutes`        smallint      NOT NULL DEFAULT 0  COMMENT '有效佩戴分钟数',
-          `created_at`          bigint        NOT NULL        COMMENT '记录创建时间 UTC 毫秒时间戳',
-          `updated_at`          bigint        NOT NULL        COMMENT '记录更新时间 UTC 毫秒时间戳',
-          PRIMARY KEY (`device_sn`, `stat_date_ts`),
-          KEY `idx_alert`    (`device_sn`, `alert_triggered`, `stat_date_ts`),
-          KEY `idx_abnormal` (`device_sn`, `is_abnormal`,     `stat_date_ts`),
-          KEY `idx_quality`  (`device_sn`, `data_quality`,    `stat_date_ts`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
-          COMMENT='宠物皮肤健康每日评估结果表';
+    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {PG_SCHEMA}")
+
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS {PG_SCHEMA}.pet_skin_health_daily (
+          device_sn           VARCHAR(64)   NOT NULL,
+          stat_date_ts        BIGINT        NOT NULL,
+          scratch_count       SMALLINT      NOT NULL DEFAULT 0,
+          scratch_duration    INT           NOT NULL DEFAULT 0,
+          scratch_avg_dur     INT           NOT NULL DEFAULT 0,
+          scratch_max_dur     INT           NOT NULL DEFAULT 0,
+          night_scratch_count SMALLINT      NOT NULL DEFAULT 0,
+          avg_temperature     DECIMAL(4,1)  DEFAULT NULL,
+          avg_humidity        DECIMAL(4,1)  DEFAULT NULL,
+          baseline_mean       DECIMAL(6,2)  DEFAULT NULL,
+          baseline_std        DECIMAL(6,2)  DEFAULT NULL,
+          temp_coef           DECIMAL(5,3)  DEFAULT NULL,
+          temp_effect         DECIMAL(5,2)  DEFAULT NULL,
+          zscore              DECIMAL(6,2)  DEFAULT NULL,
+          avg_zscore          DECIMAL(6,2)  DEFAULT NULL,
+          consec_abnormal     SMALLINT      NOT NULL DEFAULT 0,
+          eval_phase          SMALLINT      NOT NULL DEFAULT 0,
+          threshold_z         DECIMAL(4,2)  DEFAULT NULL,
+          threshold_consec    SMALLINT      DEFAULT NULL,
+          threshold_avgz      DECIMAL(4,2)  DEFAULT NULL,
+          valid_days          SMALLINT      NOT NULL DEFAULT 0,
+          is_abnormal         SMALLINT      NOT NULL DEFAULT 0,
+          alert_triggered     SMALLINT      NOT NULL DEFAULT 0,
+          alert_reason        VARCHAR(128)  DEFAULT NULL,
+          data_quality        SMALLINT      NOT NULL DEFAULT 0,
+          wear_minutes        SMALLINT      NOT NULL DEFAULT 0,
+          created_at          BIGINT        NOT NULL,
+          updated_at          BIGINT        NOT NULL,
+          PRIMARY KEY (device_sn, stat_date_ts)
+        )
     """)
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_alert    ON {PG_SCHEMA}.pet_skin_health_daily (device_sn, alert_triggered, stat_date_ts)")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_abnormal ON {PG_SCHEMA}.pet_skin_health_daily (device_sn, is_abnormal, stat_date_ts)")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_quality  ON {PG_SCHEMA}.pet_skin_health_daily (device_sn, data_quality, stat_date_ts)")
 
     conn.commit()
     cursor.close()
     conn.close()
-    print("✅ 建表成功（或已存在）")
+    print("建表成功（或已存在）")
 
 
 # ======================================
@@ -385,30 +389,31 @@ def build_rows():
 # 4. 插入数据
 # ======================================
 def insert_data(rows):
-    conn   = mysql.connector.connect(**DB_CONFIG)
+    conn   = get_conn()
     cursor = conn.cursor()
 
-    sql = """
-        INSERT IGNORE INTO `pet_skin_health_daily`
-          (`device_sn`, `stat_date_ts`,
-           `scratch_count`, `scratch_duration`, `scratch_avg_dur`,
-           `scratch_max_dur`, `night_scratch_count`,
-           `avg_temperature`, `avg_humidity`,
-           `baseline_mean`, `baseline_std`, `temp_coef`, `temp_effect`,
-           `zscore`, `avg_zscore`, `consec_abnormal`,
-           `eval_phase`, `threshold_z`, `threshold_consec`, `threshold_avgz`,
-           `valid_days`, `is_abnormal`, `alert_triggered`, `alert_reason`,
-           `data_quality`, `wear_minutes`,
-           `created_at`, `updated_at`)
+    sql = f"""
+        INSERT INTO {PG_SCHEMA}.pet_skin_health_daily
+          (device_sn, stat_date_ts,
+           scratch_count, scratch_duration, scratch_avg_dur,
+           scratch_max_dur, night_scratch_count,
+           avg_temperature, avg_humidity,
+           baseline_mean, baseline_std, temp_coef, temp_effect,
+           zscore, avg_zscore, consec_abnormal,
+           eval_phase, threshold_z, threshold_consec, threshold_avgz,
+           valid_days, is_abnormal, alert_triggered, alert_reason,
+           data_quality, wear_minutes,
+           created_at, updated_at)
         VALUES
           (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
            %s, %s)
+        ON CONFLICT DO NOTHING
     """
 
     cursor.executemany(sql, rows)
     conn.commit()
-    print(f"✅ 插入成功，共 {cursor.rowcount} 条记录")
+    print(f"插入成功，共 {cursor.rowcount} 条记录")
     cursor.close()
     conn.close()
 
@@ -417,23 +422,23 @@ def insert_data(rows):
 # 5. 查询验证
 # ======================================
 def query_data():
-    conn   = mysql.connector.connect(**DB_CONFIG)
+    conn   = get_conn()
     cursor = conn.cursor()
 
     print("\n======= 各设备记录概况 =======")
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT
             device_sn,
-            COUNT(*)                               AS 总天数,
-            SUM(is_abnormal)                       AS 异常天,
-            SUM(alert_triggered)                   AS 推送次数,
-            SUM(data_quality > 0)                  AS 缺口或缓冲天,
-            ROUND(AVG(scratch_count), 1)           AS 日均抓挠次数,
-            MAX(scratch_count)                     AS 最多单日次数,
-            ROUND(MAX(zscore), 2)                  AS 最高z_score,
-            FROM_UNIXTIME(MIN(stat_date_ts)/1000)  AS 最早统计日,
-            FROM_UNIXTIME(MAX(stat_date_ts)/1000)  AS 最晚统计日
-        FROM pet_skin_health_daily
+            COUNT(*)                                    AS 总天数,
+            SUM(is_abnormal)                            AS 异常天,
+            SUM(alert_triggered)                        AS 推送次数,
+            SUM(CASE WHEN data_quality > 0 THEN 1 ELSE 0 END) AS 缺口或缓冲天,
+            ROUND(AVG(scratch_count)::numeric, 1)       AS 日均抓挠次数,
+            MAX(scratch_count)                          AS 最多单日次数,
+            ROUND(MAX(zscore)::numeric, 2)              AS 最高z_score,
+            to_char(to_timestamp(MIN(stat_date_ts)/1000), 'YYYY-MM-DD') AS 最早统计日,
+            to_char(to_timestamp(MAX(stat_date_ts)/1000), 'YYYY-MM-DD') AS 最晚统计日
+        FROM {PG_SCHEMA}.pet_skin_health_daily
         GROUP BY device_sn
         ORDER BY device_sn
     """)
@@ -441,13 +446,13 @@ def query_data():
         print(row)
 
     print("\n======= 推送记录明细 =======")
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT
             device_sn,
-            FROM_UNIXTIME(stat_date_ts / 1000) AS 统计日期,
+            to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             scratch_count, zscore, avg_zscore,
             consec_abnormal, alert_reason
-        FROM pet_skin_health_daily
+        FROM {PG_SCHEMA}.pet_skin_health_daily
         WHERE alert_triggered = 1
         ORDER BY device_sn, stat_date_ts
     """)
@@ -459,10 +464,10 @@ def query_data():
         print("（暂无推送记录）")
 
     print("\n======= 缺口与缓冲天 =======")
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT
             device_sn,
-            FROM_UNIXTIME(stat_date_ts / 1000) AS 统计日期,
+            to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             CASE data_quality
                 WHEN 1 THEN '未佩戴'
                 WHEN 2 THEN '没电'
@@ -471,7 +476,7 @@ def query_data():
                 WHEN 5 THEN '缓冲天'
             END AS 原因,
             wear_minutes
-        FROM pet_skin_health_daily
+        FROM {PG_SCHEMA}.pet_skin_health_daily
         WHERE data_quality > 0
         ORDER BY device_sn, stat_date_ts
     """)
@@ -479,28 +484,28 @@ def query_data():
         print(row)
 
     print("\n======= DEV_002_SICK 发病期间详情 =======")
-    cursor.execute("""
+    ts_start = int(datetime(2026, 1, 15, tzinfo=timezone.utc).timestamp() * 1000)
+    ts_end   = int(datetime(2026, 2,  5, tzinfo=timezone.utc).timestamp() * 1000)
+    cursor.execute(f"""
         SELECT
-            FROM_UNIXTIME(stat_date_ts / 1000) AS 统计日期,
+            to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             scratch_count, baseline_mean,
             zscore, consec_abnormal, is_abnormal, alert_triggered
-        FROM pet_skin_health_daily
+        FROM {PG_SCHEMA}.pet_skin_health_daily
         WHERE device_sn = 'DEV_002_SICK'
-          AND stat_date_ts BETWEEN
-              UNIX_TIMESTAMP('2026-01-15') * 1000 AND
-              UNIX_TIMESTAMP('2026-02-05') * 1000
+          AND stat_date_ts BETWEEN %s AND %s
         ORDER BY stat_date_ts
-    """)
+    """, (ts_start, ts_end))
     for row in cursor.fetchall():
         print(row)
 
     print("\n======= 动态阈值变化（DEV_001 前20天）=======")
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT
-            FROM_UNIXTIME(stat_date_ts / 1000) AS 统计日期,
+            to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             valid_days, eval_phase,
             threshold_z, threshold_consec, threshold_avgz
-        FROM pet_skin_health_daily
+        FROM {PG_SCHEMA}.pet_skin_health_daily
         WHERE device_sn = 'DEV_001_NORMAL'
         ORDER BY stat_date_ts
         LIMIT 20

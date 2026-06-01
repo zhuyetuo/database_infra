@@ -1,33 +1,28 @@
 """
-IMU 原始数据库
+IMU 原始数据库（TDengine）
 =====================
 数据库: pet_dog_imu
-每个设备独立一张表: {device_sn}
-
-24 个场景设备:
-  健康场景:        device_sn_1  ~ device_sn_9
-  设备/数据质量:   device_sn_10 ~ device_sn_16
-  环境场景:        device_sn_17 ~ device_sn_20
-  个体类型:        device_sn_21 ~ device_sn_24
+超级表: imu_events
+每个设备独立子表: {device_sn}
 
 表结构：每行是一个连续行为片段的 IMU 特征摘要
-  ts_start/ts_end  行为时间段 UTC ms
-  ax/ay/az         加速度均值 mg
-  gx/gy/gz         陀螺仪均值 deg/s
+  ts       行为开始时间 UTC ms（TDengine 主时间戳）
+  ts_end   行为结束时间 UTC ms
+  ax/ay/az 加速度均值 mg
+  gx/gy/gz 陀螺仪均值 deg/s
 """
 
-import mysql.connector
+import requests
 import numpy as np
-import math
 from datetime import date, timedelta, datetime, timezone
 
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
-DB_HOST     = "127.0.0.1"
-DB_PORT     = 3306
-DB_USER     = "root"
-DB_PASSWORD = "123456"
+TD_HOST     = "127.0.0.1"
+TD_PORT     = 6041
+TD_USER     = "root"
+TD_PASS     = "taosdata"
 IMU_DB      = "pet_dog_imu"
 
 DAYS       = 180
@@ -67,185 +62,46 @@ np.random.seed(42)
 #  场景定义（24 个）
 # ══════════════════════════════════════════════════════
 SCENARIOS = [
-    # 健康场景 1-9
-    {
-        'sn':     'device_sn_1',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_2',
-        'phases': [(0, 60, 10.0, 2.0), (60, 80, 30.0, 4.0), (80, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   (60, 80),
-    },
-    {
-        'sn':     'device_sn_3',
-        'phases': [(0, 60, 10.0, 2.0), (60, 180, 28.0, 4.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   (60, 180),
-    },
-    {
-        'sn':          'device_sn_4',
-        'phases':      [(0, 40, 10.0, 2.0), (40, 55, 28.0, 4.0),
-                        (55, 120, 10.0, 2.0), (120, 135, 30.0, 4.0),
-                        (135, 180, 10.0, 2.0)],
-        'tc':          0.10,
-        'gaps':        [],
-        'sick':        None,
-        'sick_episodes': [(40, 55), (120, 135)],
-    },
-    {
-        'sn':     'device_sn_5',
-        'phases': [(0, 60, 10.0, 2.0), (60, 120, 15.0, 2.0), (120, 180, 22.0, 3.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_6',
-        'phases': [(0, 90, 10.0, 2.0), (90, 180, 25.0, 3.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   (90, 180),
-    },
-    {
-        'sn':     'device_sn_7',
-        'phases': [(0, 50, 10.0, 2.0), (50, 80, 45.0, 6.0), (80, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   (50, 80),
-    },
-    {
-        'sn':     'device_sn_8',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.35,
-        'gaps':   [],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_9',
-        'phases': [(0, 30, 10.0, 2.0), (30, 90, 3.0, 1.0), (90, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   None,
-    },
-    # 设备/数据质量场景 10-16
-    {
-        'sn':     'device_sn_10',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [(35, 38, 'unworn')],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_11',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [(40, 45, 'battery')],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_12',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [(30, 65, 'battery')],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_13',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_14',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [(50, 58, 'loose')],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_15',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [(88, 92, 'battery')],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_16',
-        'phases': [(0, 70, 10.0, 2.0), (70, 90, 35.0, 5.0), (90, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   None,
-        'drift_range': (70, 90),
-    },
-    # 环境场景 17-20
-    {
-        'sn':     'device_sn_17',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.30,
-        'gaps':   [],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_18',
-        'phases': [(0, 60, 10.0, 2.0), (60, 180, 13.0, 2.0)],
-        'tc':     0.15,
-        'gaps':   [],
-        'sick':   None,
-        'temp_shift': (60, 5.0),
-    },
-    {
-        'sn':     'device_sn_19',
-        'phases': [(0, 180, 10.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [(80, 90, 'unworn')],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_20',
-        'phases': [(0, 180, 14.0, 2.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   None,
-    },
-    # 个体类型场景 21-24
-    {
-        'sn':     'device_sn_21',
-        'phases': [(0, 180, 15.0, 4.0)],
-        'tc':     0.10,
-        'gaps':   [],
-        'sick':   None,
-        'warmup': 7,
-    },
-    {
-        'sn':     'device_sn_22',
-        'phases': [(0, 180, 5.0, 1.0)],
-        'tc':     0.05,
-        'gaps':   [],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_23',
-        'phases': [(0, 180, 20.0, 3.0)],
-        'tc':     0.12,
-        'gaps':   [],
-        'sick':   None,
-    },
-    {
-        'sn':     'device_sn_24',
-        'phases': [(0, 180, 4.0, 1.0)],
-        'tc':     0.08,
-        'gaps':   [],
-        'sick':   None,
-    },
+    {'sn': 'device_sn_1',  'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'sn': 'device_sn_2',  'phases': [(0, 60, 10.0, 2.0), (60, 80, 30.0, 4.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 80)},
+    {'sn': 'device_sn_3',  'phases': [(0, 60, 10.0, 2.0), (60, 180, 28.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 180)},
+    {'sn': 'device_sn_4',  'phases': [(0, 40, 10.0, 2.0), (40, 55, 28.0, 4.0), (55, 120, 10.0, 2.0), (120, 135, 30.0, 4.0), (135, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'sick_episodes': [(40, 55), (120, 135)]},
+    {'sn': 'device_sn_5',  'phases': [(0, 60, 10.0, 2.0), (60, 120, 15.0, 2.0), (120, 180, 22.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'sn': 'device_sn_6',  'phases': [(0, 90, 10.0, 2.0), (90, 180, 25.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': (90, 180)},
+    {'sn': 'device_sn_7',  'phases': [(0, 50, 10.0, 2.0), (50, 80, 45.0, 6.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (50, 80)},
+    {'sn': 'device_sn_8',  'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.35, 'gaps': [], 'sick': None},
+    {'sn': 'device_sn_9',  'phases': [(0, 30, 10.0, 2.0), (30, 90, 3.0, 1.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'sn': 'device_sn_10', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(35, 38, 'unworn')], 'sick': None},
+    {'sn': 'device_sn_11', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(40, 45, 'battery')], 'sick': None},
+    {'sn': 'device_sn_12', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(30, 65, 'battery')], 'sick': None},
+    {'sn': 'device_sn_13', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)], 'sick': None},
+    {'sn': 'device_sn_14', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(50, 58, 'loose')], 'sick': None},
+    {'sn': 'device_sn_15', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(88, 92, 'battery')], 'sick': None},
+    {'sn': 'device_sn_16', 'phases': [(0, 70, 10.0, 2.0), (70, 90, 35.0, 5.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'drift_range': (70, 90)},
+    {'sn': 'device_sn_17', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.30, 'gaps': [], 'sick': None},
+    {'sn': 'device_sn_18', 'phases': [(0, 60, 10.0, 2.0), (60, 180, 13.0, 2.0)], 'tc': 0.15, 'gaps': [], 'sick': None, 'temp_shift': (60, 5.0)},
+    {'sn': 'device_sn_19', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(80, 90, 'unworn')], 'sick': None},
+    {'sn': 'device_sn_20', 'phases': [(0, 180, 14.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'sn': 'device_sn_21', 'phases': [(0, 180, 15.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'warmup': 7},
+    {'sn': 'device_sn_22', 'phases': [(0, 180, 5.0, 1.0)],  'tc': 0.05, 'gaps': [], 'sick': None},
+    {'sn': 'device_sn_23', 'phases': [(0, 180, 20.0, 3.0)], 'tc': 0.12, 'gaps': [], 'sick': None},
+    {'sn': 'device_sn_24', 'phases': [(0, 180, 4.0, 1.0)],  'tc': 0.08, 'gaps': [], 'sick': None},
 ]
+
+
+# ══════════════════════════════════════════════════════
+#  TDengine REST API
+# ══════════════════════════════════════════════════════
+
+def td_exec(sql: str) -> dict:
+    url  = f"http://{TD_HOST}:{TD_PORT}/rest/sql"
+    resp = requests.post(url, data=sql.encode('utf-8'),
+                         auth=(TD_USER, TD_PASS), timeout=60)
+    resp.raise_for_status()
+    result = resp.json()
+    if result.get('code', 0) != 0:
+        raise RuntimeError(f"TDengine error: {result.get('desc', result)}")
+    return result
 
 
 # ══════════════════════════════════════════════════════
@@ -254,10 +110,6 @@ SCENARIOS = [
 
 def to_ts(d: date) -> int:
     return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp() * 1000)
-
-
-def tbl(sn: str) -> str:
-    return sn.lower()
 
 
 def is_sick_day(day_idx: int, sc: dict) -> bool:
@@ -290,38 +142,30 @@ def build_gap_map(gaps: list) -> dict:
 # ══════════════════════════════════════════════════════
 
 def gen_imu(behavior: int, sick_intensity: float = 1.0) -> tuple:
-    """返回 (ax, ay, az, gx, gy, gz)"""
     if behavior == BEHAVIOR_SLEEP:
-        ax = round(np.random.normal(0,   20),  2)
-        ay = round(np.random.normal(0,   15),  2)
-        az = round(np.random.normal(980, 25),  2)
-        gx = round(np.random.normal(0,   2),   2)
-        gy = round(np.random.normal(0,   2),   2)
-        gz = round(np.random.normal(0,   1.5), 2)
-
+        ax = round(float(np.random.normal(0,   20)),  2)
+        ay = round(float(np.random.normal(0,   15)),  2)
+        az = round(float(np.random.normal(980, 25)),  2)
+        gx = round(float(np.random.normal(0,   2)),   2)
+        gy = round(float(np.random.normal(0,   2)),   2)
+        gz = round(float(np.random.normal(0,   1.5)), 2)
     elif behavior == BEHAVIOR_MOVE:
-        ax = round(np.random.normal(40,  150), 2)
-        ay = round(np.random.normal(20,  120), 2)
-        az = round(np.random.normal(650, 280), 2)
-        gx = round(np.random.normal(0,   90),  2)
-        gy = round(np.random.normal(0,   70),  2)
-        gz = round(np.random.normal(0,   55),  2)
-
-    else:  # SCRATCH
+        ax = round(float(np.random.normal(40,  150)), 2)
+        ay = round(float(np.random.normal(20,  120)), 2)
+        az = round(float(np.random.normal(650, 280)), 2)
+        gx = round(float(np.random.normal(0,   90)),  2)
+        gy = round(float(np.random.normal(0,   70)),  2)
+        gz = round(float(np.random.normal(0,   55)),  2)
+    else:
         si = sick_intensity
-        ax = round(np.random.normal(180 * si, 80),  2)
-        ay = round(np.random.normal(40,        60),  2)
-        az = round(np.random.normal(800,       180), 2)
-        gx = round(np.random.normal(0, 130 * si),    2)
-        gy = round(np.random.normal(0,  90),          2)
-        gz = round(np.random.normal(0,  70),          2)
-
+        ax = round(float(np.random.normal(180 * si, 80)),  2)
+        ay = round(float(np.random.normal(40,        60)),  2)
+        az = round(float(np.random.normal(800,       180)), 2)
+        gx = round(float(np.random.normal(0, 130 * si)),    2)
+        gy = round(float(np.random.normal(0,  90)),          2)
+        gz = round(float(np.random.normal(0,  70)),          2)
     return ax, ay, az, gx, gy, gz
 
-
-# ══════════════════════════════════════════════════════
-#  每日事件生成
-# ══════════════════════════════════════════════════════
 
 def gen_day_events(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
     d      = START_DATE + timedelta(days=day_idx)
@@ -340,7 +184,6 @@ def gen_day_events(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
 
     for seg_s, seg_e, sleep_w, _, n_sc in segments:
         cursor = seg_s
-
         scratch_times = (
             sorted(np.random.randint(seg_s, seg_e, n_sc).tolist())
             if n_sc > 0 else []
@@ -373,25 +216,18 @@ def gen_day_events(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
     return rows
 
 
-# ══════════════════════════════════════════════════════
-#  场景数据构建
-# ══════════════════════════════════════════════════════
-
 def build_scenario_rows(sc: dict, seed: int = 42) -> list:
     np.random.seed(seed)
-
     gap_map  = build_gap_map(sc['gaps'])
     all_rows = []
 
     for i in range(DAYS):
         if i in gap_map:
             continue
-
         temp        = float(_temperature[i])
         n_scratch   = scratch_count_for_day(i, sc['phases'], temp, sc['tc'])
         sick_intens = 1.8 if is_sick_day(i, sc) else 1.0
-
-        day_rows = gen_day_events(i, n_scratch, sick_intens)
+        day_rows    = gen_day_events(i, n_scratch, sick_intens)
         all_rows.extend(day_rows)
 
     return all_rows
@@ -401,76 +237,51 @@ def build_scenario_rows(sc: dict, seed: int = 42) -> list:
 #  数据库操作
 # ══════════════════════════════════════════════════════
 
-def get_conn(database: str = None):
-    cfg = dict(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD)
-    if database:
-        cfg['database'] = database
-    return mysql.connector.connect(**cfg)
-
-
 def create_database():
-    conn   = get_conn()
-    cursor = conn.cursor()
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{IMU_DB}` "
-                   f"DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
-    conn.commit()
-    cursor.close()
-    conn.close()
-    print(f"[OK] 数据库 {IMU_DB} 已就绪")
+    td_exec(f"CREATE DATABASE IF NOT EXISTS {IMU_DB} KEEP 3650 DURATION 10 COMP 2")
+    print(f"[OK] TDengine 数据库 {IMU_DB} 已就绪")
 
 
-def create_table(conn, sn: str):
-    t = tbl(sn)
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS `{t}` (
-          `id`       bigint       NOT NULL AUTO_INCREMENT
-                     COMMENT '自增主键',
-          `ts_start` bigint       NOT NULL
-                     COMMENT '行为开始时间 UTC ms',
-          `ts_end`   bigint       NOT NULL
-                     COMMENT '行为结束时间 UTC ms',
-          `ax`       decimal(8,2) NOT NULL DEFAULT 0
-                     COMMENT '加速度X轴均值 mg',
-          `ay`       decimal(8,2) NOT NULL DEFAULT 0
-                     COMMENT '加速度Y轴均值 mg',
-          `az`       decimal(8,2) NOT NULL DEFAULT 0
-                     COMMENT '加速度Z轴均值 mg（重力方向）',
-          `gx`       decimal(8,2) NOT NULL DEFAULT 0
-                     COMMENT '陀螺仪X轴均值 deg/s',
-          `gy`       decimal(8,2) NOT NULL DEFAULT 0
-                     COMMENT '陀螺仪Y轴均值 deg/s',
-          `gz`       decimal(8,2) NOT NULL DEFAULT 0
-                     COMMENT '陀螺仪Z轴均值 deg/s',
-          PRIMARY KEY (`id`),
-          KEY `idx_ts` (`ts_start`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
-          COMMENT='设备 {sn} 原始IMU行为事件数据（场景模拟）';
+def create_stable():
+    td_exec(f"""
+        CREATE STABLE IF NOT EXISTS {IMU_DB}.imu_events (
+            ts     TIMESTAMP,
+            ts_end BIGINT,
+            ax     FLOAT,
+            ay     FLOAT,
+            az     FLOAT,
+            gx     FLOAT,
+            gy     FLOAT,
+            gz     FLOAT
+        ) TAGS (device_sn BINARY(32))
     """)
-    conn.commit()
-    cursor.close()
-    print(f"  [OK] 表 {t} 已就绪")
+    print(f"[OK] 超级表 {IMU_DB}.imu_events 已就绪")
 
 
-def insert_rows(conn, sn: str, rows: list):
+def create_child_table(sn: str):
+    td_exec(
+        f"CREATE TABLE IF NOT EXISTS {IMU_DB}.{sn} "
+        f"USING {IMU_DB}.imu_events TAGS ('{sn}')"
+    )
+    print(f"  [OK] 子表 {sn} 已就绪")
+
+
+def insert_rows(sn: str, rows: list):
     if not rows:
         print(f"  [{sn}] 无数据，跳过")
         return
 
-    t   = tbl(sn)
-    sql = f"""
-        INSERT IGNORE INTO `{t}`
-          (`ts_start`, `ts_end`, `ax`, `ay`, `az`, `gx`, `gy`, `gz`)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """
-    cursor     = conn.cursor()
-    batch_size = 1000
+    batch_size = 500
     total      = 0
     for i in range(0, len(rows), batch_size):
-        cursor.executemany(sql, rows[i: i + batch_size])
-        conn.commit()
-        total += cursor.rowcount
-    cursor.close()
+        batch = rows[i: i + batch_size]
+        vals  = " ".join(
+            f"({r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]},{r[7]})"
+            for r in batch
+        )
+        td_exec(f"INSERT INTO {IMU_DB}.{sn} VALUES {vals}")
+        total += len(batch)
+
     print(f"  [{sn}] 插入 {total} 条 IMU 事件记录")
 
 
@@ -479,28 +290,20 @@ def insert_rows(conn, sn: str, rows: list):
 # ══════════════════════════════════════════════════════
 
 def query_summary():
-    conn   = get_conn(IMU_DB)
-    cursor = conn.cursor()
-
     print("\n======= IMU 数据概况 =======")
     for sc in SCENARIOS:
-        t = tbl(sc['sn'])
+        sn = sc['sn']
         try:
-            cursor.execute(f"""
-                SELECT
-                    COUNT(*)                          AS total,
-                    FROM_UNIXTIME(MIN(ts_start)/1000) AS earliest,
-                    FROM_UNIXTIME(MAX(ts_end)/1000)   AS latest
-                FROM `{t}`
-            """)
-            row = cursor.fetchone()
-            print(f"  {sc['sn']:20s}  总={int(row[0]):6d}  "
+            result = td_exec(
+                f"SELECT COUNT(*) AS total, "
+                f"FIRST(ts) AS earliest, LAST(ts) AS latest "
+                f"FROM {IMU_DB}.{sn}"
+            )
+            row = result['data'][0]
+            print(f"  {sn:20s}  总={int(row[0]):6d}  "
                   f"最早={row[1]}  最晚={row[2]}")
         except Exception as e:
-            print(f"  {sc['sn']}: 查询失败 {e}")
-
-    cursor.close()
-    conn.close()
+            print(f"  {sn}: 查询失败 {e}")
 
 
 # ══════════════════════════════════════════════════════
@@ -511,21 +314,20 @@ def main():
     print("=== 第一步：创建数据库 ===")
     create_database()
 
-    conn = get_conn(IMU_DB)
+    print("\n=== 第二步：创建超级表 ===")
+    create_stable()
 
-    print("\n=== 第二步：建表 ===")
+    print("\n=== 第三步：创建子表 ===")
     for sc in SCENARIOS:
-        create_table(conn, sc['sn'])
+        create_child_table(sc['sn'])
 
-    print("\n=== 第三步：生成并插入数据 ===")
+    print("\n=== 第四步：生成并插入数据 ===")
     for idx, sc in enumerate(SCENARIOS):
         rows = build_scenario_rows(sc, seed=42 + idx)
         print(f"  [{sc['sn']}] 生成 {len(rows)} 条事件，开始插入...")
-        insert_rows(conn, sc['sn'], rows)
+        insert_rows(sc['sn'], rows)
 
-    conn.close()
-
-    print("\n=== 第四步：查询验证 ===")
+    print("\n=== 第五步：查询验证 ===")
     query_summary()
 
     print("\n[完成] IMU 数据库写入完毕！")
