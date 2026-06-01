@@ -68,14 +68,55 @@ python visualize_db.py          # 图表输出到 ./charts/
 
 ## 容器管理
 
-| 操作 | 命令 |
-|------|------|
-| 启动容器（后台） | `docker-compose up -d` |
-| 查看运行状态 | `docker-compose ps` 或 `docker ps` |
-| 查看实时日志 | `docker-compose logs -f` |
-| 停止容器（保留数据） | `docker-compose stop` |
-| 停止并删除容器 | `docker-compose down` |
-| 停止并删除容器 + 数据卷 | `docker-compose down -v` |
+> 新版 Docker 已将 `docker-compose` 合并为 `docker compose`（无连字符），两种写法均可。
+
+### 启动
+
+```bash
+docker compose up -d          # 后台启动所有容器
+docker compose ps             # 查看运行状态（STATUS = healthy 即可用）
+docker compose logs -f        # 实时查看日志（Ctrl+C 退出）
+docker compose logs postgres  # 只看 PostgreSQL 日志
+docker compose logs tdengine  # 只看 TDengine 日志
+```
+
+### 停止
+
+```bash
+docker compose stop           # 停止容器，保留数据（下次 up -d 可恢复）
+docker compose restart        # 重启所有容器
+```
+
+### 删除
+
+```bash
+docker compose down           # 停止并删除容器（数据卷保留，数据不丢失）
+docker compose down -v        # 停止并删除容器 + 数据卷（数据完全清除）
+docker compose down --rmi all # 同上，同时删除镜像
+```
+
+### 单独操作某个容器
+
+```bash
+docker compose stop postgres
+docker compose stop tdengine
+docker compose start postgres
+docker compose start tdengine
+docker compose restart postgres
+```
+
+### 其他常用
+
+```bash
+docker compose pull           # 拉取最新镜像（不重建容器）
+docker compose up -d --build  # 强制重建后启动
+```
+
+| 操作 | 数据是否保留 |
+|------|-------------|
+| `stop` / `start` | ✅ 保留 |
+| `down` | ✅ 保留（卷未删除） |
+| `down -v` | ❌ 全部清除 |
 
 ---
 
