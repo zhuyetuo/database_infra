@@ -1,67 +1,65 @@
 """
-双设备实时数据模拟器（15分钟批次管道）
-========================================
-模拟真实设备的数据上报流程：
+Dual-device real-time data simulator (batch pipeline)
+======================================================
+Pipeline:
 
-  [设备端] 每 15 分钟采集一批 IMU 原始数据
-       ↓  批量上传
-  [TDengine] 存储原始 IMU 采样点（每条 = 一个采样时刻）
-       ↓  行为识别算法
-  [PostgreSQL behavior] 输出行为事件（运动/睡眠/抓挠片段）
-       ↓  每天聚合（24 × 15min = 96 个窗口）
-  [PostgreSQL skin_assessment / scratch_baseline] 每日皮肤健康评估
+  [Device] every WINDOW_MINUTES -> upload a batch
+       |
+  [TDengine] imu_raw  - raw IMU samples at IMU_SAMPLE_HZ
+  [TDengine] env_raw  - env/neck-temp samples at ENV_SAMPLE_INTERVAL / NECK_SAMPLE_INTERVAL
+       |
+  [behavior recognition]
+       |
+  [PostgreSQL behavior] - behavior events (move/sleep/scratch segments)
+       |  (after WINDOWS_PER_DAY windows)
+  [PostgreSQL skin_assessment / scratch_baseline] - daily health assessment
 
-设备场景：
-  sim_device_normal  — 全程正常，抓挠稳定 ~10次/天
-  sim_device_sick    — 前 SICK_START_DAY 个模拟天正常，之后逐步发病
-
-时间模式（CONFIG 区可调）：
-  SAMPLE_HZ          IMU 采样率（Hz），决定每窗口多少条原始数据
-  WINDOW_SEC         一个 15 分钟窗口对应多少真实秒（测试时可设短）
-                     例：WINDOW_SEC=15  → 每 15 秒模拟一个 15 分钟窗口
-  WINDOWS_PER_DAY    多少个窗口 = 1 个模拟天（实际是 96，测试可设少）
+All parameters are injected via environment variables set in run_sim.sh.
 """
 
+import os
 import time
 import signal
-import sys
 import math
 import requests
 import psycopg2
 import numpy as np
 from datetime import datetime, timezone, date, timedelta
 
-# ══════════════════════════════════════════════════════
-#  CONFIG
-# ══════════════════════════════════════════════════════
-TD_HOST     = "127.0.0.1"
-TD_PORT     = 6041
-TD_USER     = "root"
-TD_PASS     = "taosdata"
-IMU_DB      = "pet_dog_imu"
+# ============================================================
+#  Config from environment variables (set by run_sim.sh)
+# ============================================================
+TD_HOST     = os.environ.get("TD_HOST",     "127.0.0.1")
+TD_PORT     = int(os.environ.get("TD_PORT", "6041"))
+TD_USER     = os.environ.get("TD_USER",     "root")
+TD_PASS     = os.environ.get("TD_PASS",     "taosdata")
+IMU_DB      = os.environ.get("IMU_DB",      "pet_dog_imu")
 
-PG_HOST     = "127.0.0.1"
-PG_PORT     = 5432
-PG_USER     = "postgres"
-PG_PASSWORD = "123456"
-PG_DB       = "pet_collar"
+PG_HOST     = os.environ.get("PG_HOST",     "127.0.0.1")
+PG_PORT     = int(os.environ.get("PG_PORT", "5432"))
+PG_USER     = os.environ.get("PG_USER",     "postgres")
+PG_PASSWORD = os.environ.get("PG_PASSWORD", "123456")
+PG_DB       = os.environ.get("PG_DB",       "pet_collar")
 
-# ── 时间参数 ────────────────────────────────────────
-SAMPLE_HZ       = 25           # IMU 采样率 Hz（真实设备常见值）
-WINDOW_MINUTES  = 15           # 每批窗口时长（分钟）
-WINDOW_SEC      = 15           # 每个窗口对应多少真实秒（测试加速用）
-                               # 生产环境设为 WINDOW_MINUTES * 60 = 900
-WINDOWS_PER_DAY = 12           # 多少窗口 = 1个模拟天（实际96，测试用12）
+# Window / timing
+WINDOW_MINUTES  = int(os.environ.get("WINDOW_MINUTES",  "15"))  # data window length (min)
+WINDOW_SEC      = int(os.environ.get("WINDOW_SEC",      "15"))  # real seconds to wait per window
+WINDOWS_PER_DAY = int(os.environ.get("WINDOWS_PER_DAY", "12"))  # windows per simulated day
 
-# ── 场景参数 ────────────────────────────────────────
-SICK_START_DAY  = 5            # sim_device_sick 在第几模拟天开始发病
+# Sampling rates
+IMU_SAMPLE_HZ        = int(os.environ.get("IMU_SAMPLE_HZ",        "25"))   # IMU Hz
+ENV_SAMPLE_INTERVAL  = int(os.environ.get("ENV_SAMPLE_INTERVAL",  "60"))   # env temp/humidity (sec)
+NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "300"))  # neck temp (sec)
 
-DEVICES = [
-    {"sn": "sim_device_normal", "sick": False},
-    {"sn": "sim_device_sick",   "sick": True},
-]
+# Scenario
+SICK_START_DAY = int(os.environ.get("SICK_START_DAY", "5"))
 
-# ── 算法常量（与 skin_assessment_db.py 保持一致）──
+# Derived constants
+WINDOW_SECONDS = WINDOW_MINUTES * 60  # window length in seconds
+
+# ============================================================
+#  Algorithm constants (must match skin_assessment_db.py)
+# ============================================================
 WARMUP   = 3
 MIN_STD  = 2.0
 NORMAL_W = 0.05
@@ -71,22 +69,27 @@ BEHAVIOR_MOVE    = 1
 BEHAVIOR_SLEEP   = 2
 BEHAVIOR_SCRATCH = 3
 
-# ══════════════════════════════════════════════════════
-#  优雅停止
-# ══════════════════════════════════════════════════════
+DEVICES = [
+    {"sn": "sim_device_normal", "sick": False},
+    {"sn": "sim_device_sick",   "sick": True},
+]
+
+# ============================================================
+#  Graceful stop
+# ============================================================
 _running = True
 
 def _handle_sigint(sig, frame):
     global _running
-    print("\n\n[停止] Ctrl+C，正在退出...")
+    print("\n\n[stop] Ctrl+C received, exiting...")
     _running = False
 
 signal.signal(signal.SIGINT, _handle_sigint)
 
 
-# ══════════════════════════════════════════════════════
+# ============================================================
 #  TDengine REST
-# ══════════════════════════════════════════════════════
+# ============================================================
 
 def td_exec(sql: str) -> dict:
     url  = f"http://{TD_HOST}:{TD_PORT}/rest/sql"
@@ -95,14 +98,14 @@ def td_exec(sql: str) -> dict:
     resp.raise_for_status()
     result = resp.json()
     if result.get("code", 0) != 0:
-        raise RuntimeError(f"TDengine error [{result.get('code')}]: {result.get('desc')}")
+        raise RuntimeError(f"TDengine [{result.get('code')}]: {result.get('desc')}")
     return result
 
 
 def td_init():
-    """创建数据库、超级表、子表（idempotent）"""
     td_exec(f"CREATE DATABASE IF NOT EXISTS {IMU_DB} KEEP 3650 DURATION 10 COMP 2")
-    # 超级表：每行 = 一个 IMU 采样点（单次采样的 6 轴数值）
+
+    # Super table: raw IMU samples (one row = one sample at IMU_SAMPLE_HZ)
     td_exec(f"""
         CREATE STABLE IF NOT EXISTS {IMU_DB}.imu_raw (
             ts  TIMESTAMP,
@@ -114,37 +117,53 @@ def td_init():
             gz  FLOAT
         ) TAGS (device_sn BINARY(64))
     """)
+
+    # Super table: env + neck temp samples
+    td_exec(f"""
+        CREATE STABLE IF NOT EXISTS {IMU_DB}.env_raw (
+            ts        TIMESTAMP,
+            env_temp  FLOAT,
+            env_humi  FLOAT,
+            neck_temp FLOAT
+        ) TAGS (device_sn BINARY(64))
+    """)
+
     for dev in DEVICES:
         sn = dev["sn"]
-        td_exec(
-            f"CREATE TABLE IF NOT EXISTS {IMU_DB}.{sn} "
-            f"USING {IMU_DB}.imu_raw TAGS ('{sn}')"
-        )
-    print("[TDengine] 数据库 & 子表就绪")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {IMU_DB}.imu_{sn} "
+                f"USING {IMU_DB}.imu_raw TAGS ('{sn}')")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {IMU_DB}.env_{sn} "
+                f"USING {IMU_DB}.env_raw TAGS ('{sn}')")
+
+    print("[TDengine] DB & tables ready")
 
 
-def td_insert_batch(sn: str, samples: list):
-    """
-    批量插入原始 IMU 采样点。
-    samples: list of (ts_ms, ax, ay, az, gx, gy, gz)
-    每批最多 1000 条发一次请求避免 SQL 过长。
-    """
+def td_insert_imu(sn: str, samples: list):
+    """samples: list of (ts_ms, ax, ay, az, gx, gy, gz)"""
     CHUNK = 1000
-    total = 0
     for i in range(0, len(samples), CHUNK):
-        chunk = samples[i: i + CHUNK]
-        vals  = " ".join(
-            f"({s[0]},{s[1]},{s[2]},{s[3]},{s[4]},{s[5]},{s[6]})"
-            for s in chunk
+        c    = samples[i: i + CHUNK]
+        vals = " ".join(f"({r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]})" for r in c)
+        td_exec(f"INSERT INTO {IMU_DB}.imu_{sn} VALUES {vals}")
+
+
+def td_insert_env(sn: str, samples: list):
+    """samples: list of (ts_ms, env_temp, env_humi, neck_temp_or_None)"""
+    if not samples:
+        return
+    CHUNK = 500
+    for i in range(0, len(samples), CHUNK):
+        c    = samples[i: i + CHUNK]
+        vals = " ".join(
+            f"({r[0]},{r[1]},{r[2]},{r[3] if r[3] is not None else 'NULL'})"
+            for r in c
         )
-        td_exec(f"INSERT INTO {IMU_DB}.{sn} VALUES {vals}")
-        total += len(chunk)
-    return total
+        td_exec(f"INSERT INTO {IMU_DB}.env_{sn} VALUES {vals}")
 
 
-# ══════════════════════════════════════════════════════
+# ============================================================
 #  PostgreSQL
-# ══════════════════════════════════════════════════════
+# ============================================================
 
 def pg_conn():
     return psycopg2.connect(
@@ -157,24 +176,13 @@ def pg_init():
     conn = pg_conn()
     cur  = conn.cursor()
 
-    for s in ["pet_dog_environment", "pet_dog_behavior",
-              "pet_dog_skin_assessment", "pet_dog_scratch_baseline"]:
-        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {s}")
+    for schema in ["pet_dog_behavior", "pet_dog_skin_assessment", "pet_dog_scratch_baseline"]:
+        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
 
     for dev in DEVICES:
         sn = dev["sn"]
 
-        cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS pet_dog_environment.{sn} (
-                id           BIGSERIAL    PRIMARY KEY,
-                ts           BIGINT       NOT NULL UNIQUE,
-                neck_temp    NUMERIC(5,2),
-                env_temp     NUMERIC(5,1) NOT NULL,
-                env_humidity NUMERIC(5,1) NOT NULL
-            )
-        """)
-
-        # behavior 表：每行 = 算法输出的一个行为片段
+        # behavior: one row per recognized behavior segment
         cur.execute(f"""
             CREATE TABLE IF NOT EXISTS pet_dog_behavior.{sn} (
                 id           BIGSERIAL     PRIMARY KEY,
@@ -183,7 +191,6 @@ def pg_init():
                 behavior     SMALLINT      NOT NULL,
                 duration_sec NUMERIC(10,2) NOT NULL,
                 confidence   NUMERIC(5,3)  NOT NULL,
-                -- 片段内 IMU 均值（行为识别时已计算好）
                 ax_mean      NUMERIC(8,2),
                 ay_mean      NUMERIC(8,2),
                 az_mean      NUMERIC(8,2),
@@ -192,10 +199,8 @@ def pg_init():
                 gz_mean      NUMERIC(8,2)
             )
         """)
-        cur.execute(f"""
-            CREATE INDEX IF NOT EXISTS {sn}_beh_ts
-            ON pet_dog_behavior.{sn} (ts_start)
-        """)
+        cur.execute(f"CREATE INDEX IF NOT EXISTS {sn}_beh_ts "
+                    f"ON pet_dog_behavior.{sn} (ts_start)")
 
         cur.execute(f"""
             CREATE TABLE IF NOT EXISTS pet_dog_skin_assessment.{sn} (
@@ -231,16 +236,15 @@ def pg_init():
     conn.commit()
     cur.close()
     conn.close()
-    print("[PostgreSQL] 所有表就绪")
+    print("[PostgreSQL] all tables ready")
 
 
-# ══════════════════════════════════════════════════════
-#  IMU 原始数据生成（模拟设备采样）
-# ══════════════════════════════════════════════════════
+# ============================================================
+#  IMU sample generator
+# ============================================================
 
-def _imu_sample(behavior: int, sick_intensity: float = 1.0) -> tuple:
-    """生成一个采样点的 6 轴数值"""
-    si = sick_intensity
+def _imu_sample(behavior: int, si: float = 1.0) -> tuple:
+    """Return (ax, ay, az, gx, gy, gz) for one sample."""
     if behavior == BEHAVIOR_SLEEP:
         return (
             round(float(np.random.normal(0,   20)),  2),
@@ -270,76 +274,68 @@ def _imu_sample(behavior: int, sick_intensity: float = 1.0) -> tuple:
         )
 
 
-def generate_window(window_start_ms: int, sick_intensity: float) -> tuple:
-    """
-    模拟一个 15 分钟窗口内的 IMU 采集过程。
+# ============================================================
+#  Window data generation
+# ============================================================
 
-    返回：
-      raw_samples  — list of (ts_ms, ax, ay, az, gx, gy, gz)
-                     直接写入 TDengine
-      segments     — list of dict {ts_start, ts_end, behavior, samples}
-                     由"行为识别算法"切分出来，写入 PostgreSQL behavior 表
+def generate_imu_window(window_start_ms: int, si: float) -> tuple:
     """
-    window_ms   = WINDOW_MINUTES * 60 * 1000
-    step_ms     = int(1000 / SAMPLE_HZ)   # 采样间隔（ms）
-    total_steps = WINDOW_MINUTES * 60 * SAMPLE_HZ  # 共多少个采样点
+    Generate one window of IMU data.
+
+    Returns:
+      raw_samples  - list of (ts_ms, ax, ay, az, gx, gy, gz)  -> TDengine
+      segments     - list of dicts (recognized behavior events) -> PostgreSQL
+    """
+    step_ms     = int(1000 / IMU_SAMPLE_HZ)
+    total_steps = WINDOW_SECONDS * IMU_SAMPLE_HZ
 
     raw_samples = []
     segments    = []
-
     cursor_ms   = window_start_ms
-    step_idx    = 0
+    steps_done  = 0
 
-    while step_idx < total_steps:
-        # 随机选一个行为片段（设备运动学上的连续行为）
-        # 根据时间段决定行为分布
-        elapsed_frac = (cursor_ms - window_start_ms) / window_ms
-        hour_of_day  = (datetime.fromtimestamp(cursor_ms / 1000, tz=timezone.utc).hour)
+    while steps_done < total_steps:
+        hour = datetime.fromtimestamp(cursor_ms / 1000, tz=timezone.utc).hour
 
-        # 行为概率权重 [sleep, move, scratch]
-        if   0 <= hour_of_day < 6:   w = [0.80, 0.15, 0.05]
-        elif 6 <= hour_of_day < 8:   w = [0.30, 0.55, 0.15]
-        elif 8 <= hour_of_day < 12:  w = [0.10, 0.70, 0.20]
-        elif 12 <= hour_of_day < 14: w = [0.65, 0.25, 0.10]
-        elif 14 <= hour_of_day < 20: w = [0.10, 0.70, 0.20]
-        elif 20 <= hour_of_day < 22: w = [0.45, 0.45, 0.10]
-        else:                         w = [0.75, 0.20, 0.05]
+        # Behavior probability [sleep, move, scratch]
+        if   0  <= hour < 6:  w = [0.80, 0.15, 0.05]
+        elif 6  <= hour < 8:  w = [0.30, 0.55, 0.15]
+        elif 8  <= hour < 12: w = [0.10, 0.70, 0.20]
+        elif 12 <= hour < 14: w = [0.65, 0.25, 0.10]
+        elif 14 <= hour < 20: w = [0.10, 0.70, 0.20]
+        elif 20 <= hour < 22: w = [0.45, 0.45, 0.10]
+        else:                  w = [0.75, 0.20, 0.05]
 
-        # 发病后提高抓挠权重
-        scratch_boost = (sick_intensity - 1.0) * 0.35
-        w[2] = min(w[2] + scratch_boost, 0.65)
-        total_w = sum(w); w = [x / total_w for x in w]
+        boost = (si - 1.0) * 0.35
+        w[2]  = min(w[2] + boost, 0.65)
+        s     = sum(w); w = [x / s for x in w]
 
-        btype = np.random.choice([BEHAVIOR_SLEEP, BEHAVIOR_MOVE, BEHAVIOR_SCRATCH],
-                                 p=w)
+        btype = int(np.random.choice([BEHAVIOR_SLEEP, BEHAVIOR_MOVE, BEHAVIOR_SCRATCH], p=w))
 
-        # 片段持续采样点数
         if btype == BEHAVIOR_SLEEP:
-            seg_steps = np.random.randint(SAMPLE_HZ * 30,  SAMPLE_HZ * 600)  # 30s~10min
+            seg_steps = np.random.randint(IMU_SAMPLE_HZ * 30,  IMU_SAMPLE_HZ * 600)
         elif btype == BEHAVIOR_MOVE:
-            seg_steps = np.random.randint(SAMPLE_HZ * 5,   SAMPLE_HZ * 120)  # 5s~2min
-        else:  # SCRATCH
-            seg_steps = np.random.randint(SAMPLE_HZ * 1,   SAMPLE_HZ * 8)    # 1s~8s
+            seg_steps = np.random.randint(IMU_SAMPLE_HZ * 5,   IMU_SAMPLE_HZ * 120)
+        else:
+            seg_steps = np.random.randint(IMU_SAMPLE_HZ * 1,   IMU_SAMPLE_HZ * 8)
 
-        seg_steps = min(seg_steps, total_steps - step_idx)
+        seg_steps    = min(seg_steps, total_steps - steps_done)
         if seg_steps <= 0:
             break
 
         seg_start_ms = cursor_ms
-        seg_samples  = []
+        seg_data     = []
 
         for _ in range(seg_steps):
-            feat = _imu_sample(btype, sick_intensity)
+            feat = _imu_sample(btype, si)
             raw_samples.append((cursor_ms,) + feat)
-            seg_samples.append(feat)
-            cursor_ms += step_ms
+            seg_data.append(feat)
+            cursor_ms  += step_ms
+            steps_done += 1
 
-        step_idx += seg_steps
+        seg_end_ms = cursor_ms
+        dur_sec    = round((seg_end_ms - seg_start_ms) / 1000.0, 2)
 
-        seg_end_ms   = cursor_ms
-        dur_sec      = round((seg_end_ms - seg_start_ms) / 1000.0, 2)
-
-        # 置信度：抓挠识别稍低，睡眠最高
         if btype == BEHAVIOR_SLEEP:
             conf = round(np.random.uniform(0.88, 0.99), 3)
         elif btype == BEHAVIOR_MOVE:
@@ -347,8 +343,7 @@ def generate_window(window_start_ms: int, sick_intensity: float) -> tuple:
         else:
             conf = round(np.random.uniform(0.72, 0.93), 3)
 
-        # 片段内 IMU 均值（行为识别模型的输入特征）
-        arr = np.array(seg_samples)
+        arr = np.array(seg_data)
         segments.append({
             "ts_start":    seg_start_ms,
             "ts_end":      seg_end_ms,
@@ -366,52 +361,82 @@ def generate_window(window_start_ms: int, sick_intensity: float) -> tuple:
     return raw_samples, segments
 
 
-# ══════════════════════════════════════════════════════
-#  写入行为事件
-# ══════════════════════════════════════════════════════
+def generate_env_window(window_start_ms: int, day_idx: int, si: float) -> list:
+    """
+    Generate env + neck-temp samples for one window.
+
+    ENV_SAMPLE_INTERVAL  : seconds between env temp/humidity readings
+    NECK_SAMPLE_INTERVAL : seconds between neck temp readings (>= ENV_SAMPLE_INTERVAL)
+
+    Returns list of (ts_ms, env_temp, env_humi, neck_temp_or_None) -> TDengine env_raw
+    """
+    doy      = (date.today() + timedelta(days=day_idx)).timetuple().tm_yday
+    env_base = 22 + 13 * math.sin((doy - 80) / 365 * 2 * math.pi)
+    hum_base = 65 + 15 * math.sin((doy - 80) / 365 * 2 * math.pi)
+
+    samples   = []
+    cursor_s  = 0  # offset in seconds within the window
+
+    while cursor_s < WINDOW_SECONDS:
+        ts_ms    = window_start_ms + cursor_s * 1000
+        env_temp = round(env_base + np.random.normal(0, 1.5), 1)
+        env_humi = round(hum_base + np.random.normal(0, 3.0), 1)
+
+        # neck temp: only sampled at NECK_SAMPLE_INTERVAL
+        neck_temp = None
+        if cursor_s % NECK_SAMPLE_INTERVAL == 0:
+            if si > 1.3:
+                neck_temp = round(38.5 + np.random.uniform(0.0, 0.8) * (si - 0.3), 2)
+            else:
+                neck_temp = round(37.5 + np.random.uniform(-0.3, 0.3), 2)
+
+        samples.append((ts_ms, env_temp, env_humi, neck_temp))
+        cursor_s += ENV_SAMPLE_INTERVAL
+
+    return samples
+
+
+# ============================================================
+#  PostgreSQL: write behavior events
+# ============================================================
 
 def pg_insert_behavior(conn, sn: str, segments: list) -> int:
-    """将行为识别结果写入 PostgreSQL behavior 表，返回抓挠次数"""
+    """Write behavior segments, return scratch count."""
     if not segments:
         return 0
     cur = conn.cursor()
-    sql = f"""
+    cur.executemany(
+        f"""
         INSERT INTO pet_dog_behavior.{sn}
             (ts_start, ts_end, behavior, duration_sec, confidence,
              ax_mean, ay_mean, az_mean, gx_mean, gy_mean, gz_mean)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT DO NOTHING
-    """
-    rows = [
-        (s["ts_start"], s["ts_end"], s["behavior"], s["duration_sec"], s["confidence"],
-         s["ax_mean"], s["ay_mean"], s["az_mean"],
-         s["gx_mean"], s["gy_mean"], s["gz_mean"])
-        for s in segments
-    ]
-    cur.executemany(sql, rows)
+        """,
+        [(s["ts_start"], s["ts_end"], s["behavior"], s["duration_sec"], s["confidence"],
+          s["ax_mean"], s["ay_mean"], s["az_mean"],
+          s["gx_mean"], s["gy_mean"], s["gz_mean"])
+         for s in segments],
+    )
     conn.commit()
     cur.close()
-    scratch_cnt = sum(1 for s in segments if s["behavior"] == BEHAVIOR_SCRATCH)
-    return scratch_cnt
+    return sum(1 for s in segments if s["behavior"] == BEHAVIOR_SCRATCH)
 
 
-# ══════════════════════════════════════════════════════
-#  环境 & 皮肤评估（每日结算）
-# ══════════════════════════════════════════════════════
+# ============================================================
+#  Daily settlement: skin assessment + baseline
+# ============================================================
 
-def _get_thresholds(vd: int):
+def _thresholds(vd):
     if vd < 1:      return None, None, None
     elif vd <= 11:  return 4.0, 5, 5.0
     elif vd <= 27:  return 3.5, 4, 4.5
     else:           return 2.5, 3, 3.5
 
-def _get_phase(vd: int) -> int:
-    if vd == 0:     return 0
-    elif vd <= 11:  return 1
-    elif vd <= 27:  return 2
-    else:           return 3
+def _phase(vd):
+    return 0 if vd == 0 else 1 if vd <= 11 else 2 if vd <= 27 else 3
 
-def _temp_coef(bc: list, bt: list) -> float:
+def _temp_coef(bc, bt):
     if len(bc) < 20:
         return 0.0
     x = np.array(bt, float); y = np.array(bc, float)
@@ -419,59 +444,40 @@ def _temp_coef(bc: list, bt: list) -> float:
     return round(float(np.clip(c, 0.0, 0.4)), 3)
 
 
-def settle_day(conn, state: "DeviceState"):
-    """一天所有窗口跑完后，写环境数据 + 皮肤评估 + 基线"""
+def settle_day(conn, state):
     stat_date = (date.today() + timedelta(days=state.day_idx)).isoformat()
-    temp      = state.env_temp()
-    humi      = state.env_humidity()
     count     = state.day_scratch_count
     si        = state.sick_intensity()
     wear_min  = int(np.random.uniform(1380, 1440))
-    neck_temp = (round(38.5 + np.random.uniform(0.0, 0.8) * (si - 0.3), 2)
-                 if si > 1.3 else
-                 round(37.5 + np.random.uniform(-0.3, 0.3), 2))
+
+    # estimate daily temperature from env_raw via buf_t
+    temp = state.buf_t[-1] if state.buf_t else 20.0
 
     cur = conn.cursor()
 
-    # 环境
-    ts_env = int(datetime.now(timezone.utc).timestamp() * 1000)
-    cur.execute(f"""
-        INSERT INTO pet_dog_environment.{state.sn}
-            (ts, neck_temp, env_temp, env_humidity)
-        VALUES (%s,%s,%s,%s)
-        ON CONFLICT (ts) DO UPDATE
-          SET neck_temp=EXCLUDED.neck_temp,
-              env_temp=EXCLUDED.env_temp,
-              env_humidity=EXCLUDED.env_humidity
-    """, (ts_env, neck_temp, temp, humi))
-
-    state.buf_t.append(temp)
-
-    # 热身期
+    # warmup
     if state.day_idx < WARMUP:
         state.buf_c.append(count)
-        cur.execute(f"""
-            INSERT INTO pet_dog_skin_assessment.{state.sn}
+        cur.execute(
+            f"""INSERT INTO pet_dog_skin_assessment.{state.sn}
                 (stat_date, scratch_count, eval_phase, data_quality, wear_minutes)
-            VALUES (%s,%s,0,0,%s)
-            ON CONFLICT (stat_date) DO UPDATE
-              SET scratch_count=EXCLUDED.scratch_count,
-                  wear_minutes=EXCLUDED.wear_minutes
-        """, (stat_date, count, wear_min))
-        conn.commit()
-        cur.close()
-        print(f"  [{state.sn}] 模拟天{state.day_idx:3d} [热身期] 抓挠={count:3d}次")
+                VALUES (%s,%s,0,0,%s)
+                ON CONFLICT (stat_date) DO UPDATE
+                  SET scratch_count=EXCLUDED.scratch_count, wear_minutes=EXCLUDED.wear_minutes""",
+            (stat_date, count, wear_min),
+        )
+        conn.commit(); cur.close()
+        print(f"  [{state.sn}] day {state.day_idx:3d} [warmup] scratch={count:3d}")
         state.day_scratch_count = 0
         state.day_idx += 1
         return
 
-    # 初始化基线
     if state.mean is None:
         state.mean = float(np.mean(state.buf_c)) if state.buf_c else float(count)
         state.std  = max(float(np.std(state.buf_c)) if len(state.buf_c) > 1 else MIN_STD, MIN_STD)
 
     state.valid_days += 1
-    tz, tc, ta = _get_thresholds(state.valid_days)
+    tz, tc, ta = _thresholds(state.valid_days)
     coef       = _temp_coef(state.buf_c, state.buf_t)
     zscore     = round(((count - state.mean) - coef * (temp - 20)) / state.std, 2)
     is_abn     = bool(tz is not None and zscore > tz)
@@ -493,197 +499,200 @@ def settle_day(conn, state: "DeviceState"):
         state.recent_z.pop(0)
 
     alert  = bool(tc and state.consec >= tc and avg_z >= ta)
-    reason = (f"连续{state.consec}天z>{tz:.1f}，均值z={avg_z:.2f}，抓挠{count}次"
+    reason = (f"consec {state.consec}d z>{tz:.1f}, avg_z={avg_z:.2f}, scratch={count}"
               if alert else None)
 
-    cur.execute(f"""
-        INSERT INTO pet_dog_skin_assessment.{state.sn}
-            (stat_date, scratch_count,
-             baseline_mean, baseline_std, zscore, avg_zscore,
-             consec_abnormal, eval_phase,
-             threshold_z, threshold_consec,
-             is_abnormal, alert_triggered, alert_reason,
-             data_quality, wear_minutes)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s)
-        ON CONFLICT (stat_date) DO UPDATE
-          SET scratch_count    = EXCLUDED.scratch_count,
-              baseline_mean    = EXCLUDED.baseline_mean,
-              baseline_std     = EXCLUDED.baseline_std,
-              zscore           = EXCLUDED.zscore,
-              avg_zscore       = EXCLUDED.avg_zscore,
-              consec_abnormal  = EXCLUDED.consec_abnormal,
-              is_abnormal      = EXCLUDED.is_abnormal,
-              alert_triggered  = EXCLUDED.alert_triggered,
-              alert_reason     = EXCLUDED.alert_reason,
-              wear_minutes     = EXCLUDED.wear_minutes
-    """, (
-        stat_date, count,
-        round(state.mean, 2), round(state.std, 2), zscore, avg_z,
-        state.consec, _get_phase(state.valid_days),
-        tz, tc,
-        int(is_abn), int(alert), reason, wear_min,
-    ))
+    cur.execute(
+        f"""INSERT INTO pet_dog_skin_assessment.{state.sn}
+            (stat_date, scratch_count, baseline_mean, baseline_std,
+             zscore, avg_zscore, consec_abnormal, eval_phase,
+             threshold_z, threshold_consec, is_abnormal, alert_triggered,
+             alert_reason, data_quality, wear_minutes)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s)
+            ON CONFLICT (stat_date) DO UPDATE
+              SET scratch_count=EXCLUDED.scratch_count,
+                  baseline_mean=EXCLUDED.baseline_mean,
+                  baseline_std=EXCLUDED.baseline_std,
+                  zscore=EXCLUDED.zscore, avg_zscore=EXCLUDED.avg_zscore,
+                  consec_abnormal=EXCLUDED.consec_abnormal,
+                  is_abnormal=EXCLUDED.is_abnormal,
+                  alert_triggered=EXCLUDED.alert_triggered,
+                  alert_reason=EXCLUDED.alert_reason,
+                  wear_minutes=EXCLUDED.wear_minutes""",
+        (stat_date, count,
+         round(state.mean, 2), round(state.std, 2), zscore, avg_z,
+         state.consec, _phase(state.valid_days),
+         tz, tc, int(is_abn), int(alert), reason, wear_min),
+    )
 
     confidence = round(min(1.0, state.valid_days / 30), 2)
-    cur.execute(f"""
-        INSERT INTO pet_dog_scratch_baseline.{state.sn}
+    cur.execute(
+        f"""INSERT INTO pet_dog_scratch_baseline.{state.sn}
             (stat_date, baseline_mean, baseline_std, temp_coef, confidence, valid_days)
-        VALUES (%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (stat_date) DO UPDATE
-          SET baseline_mean=EXCLUDED.baseline_mean,
-              baseline_std=EXCLUDED.baseline_std,
-              temp_coef=EXCLUDED.temp_coef,
-              confidence=EXCLUDED.confidence,
-              valid_days=EXCLUDED.valid_days
-    """, (stat_date, round(state.mean, 2), round(state.std, 2),
-          coef, confidence, state.valid_days))
+            VALUES (%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (stat_date) DO UPDATE
+              SET baseline_mean=EXCLUDED.baseline_mean,
+                  baseline_std=EXCLUDED.baseline_std,
+                  temp_coef=EXCLUDED.temp_coef,
+                  confidence=EXCLUDED.confidence,
+                  valid_days=EXCLUDED.valid_days""",
+        (stat_date, round(state.mean, 2), round(state.std, 2), coef, confidence, state.valid_days),
+    )
 
-    conn.commit()
-    cur.close()
+    conn.commit(); cur.close()
 
-    alert_tag = "  🚨 报警!" if alert else ""
-    abn_tag   = " ⚠️ 异常" if is_abn else ""
-    print(f"  [{state.sn}] 模拟天{state.day_idx:3d}  抓挠={count:3d}次  "
-          f"z={zscore:+.2f}  基线={state.mean:.1f}±{state.std:.1f}  "
-          f"phase={_get_phase(state.valid_days)}{abn_tag}{alert_tag}")
+    alert_tag = "  !! ALERT" if alert else ""
+    abn_tag   = " [ABN]"    if is_abn else ""
+    print(f"  [{state.sn}] day {state.day_idx:3d}  scratch={count:3d}  "
+          f"z={zscore:+.2f}  baseline={state.mean:.1f}+/-{state.std:.1f}  "
+          f"phase={_phase(state.valid_days)}{abn_tag}{alert_tag}")
 
     state.day_scratch_count = 0
     state.day_idx += 1
 
 
-# ══════════════════════════════════════════════════════
-#  设备状态
-# ══════════════════════════════════════════════════════
+# ============================================================
+#  Device state
+# ============================================================
 
 class DeviceState:
-    def __init__(self, sn: str, is_sick: bool):
-        self.sn            = sn
-        self.is_sick       = is_sick
-        self.day_idx       = 0
-        self.window_in_day = 0      # 当天已完成的窗口数
-
-        # 基线状态
-        self.mean       = None
-        self.std        = MIN_STD
-        self.buf_c      = []
-        self.buf_t      = []
-        self.consec     = 0
-        self.valid_days = 0
-        self.recent_z   = []
-
-        # 当天累计抓挠次数（跨窗口累加）
+    def __init__(self, sn, is_sick):
+        self.sn             = sn
+        self.is_sick        = is_sick
+        self.day_idx        = 0
+        self.window_in_day  = 0
+        self.mean           = None
+        self.std            = MIN_STD
+        self.buf_c          = []
+        self.buf_t          = []
+        self.consec         = 0
+        self.valid_days     = 0
+        self.recent_z       = []
         self.day_scratch_count = 0
 
-    def sick_intensity(self) -> float:
+    def sick_intensity(self):
         if not self.is_sick or self.day_idx < SICK_START_DAY:
             return 1.0
         progress = min((self.day_idx - SICK_START_DAY) / 20.0, 1.0)
         return 1.0 + 1.2 * progress
 
-    def env_temp(self) -> float:
-        doy  = (date.today() + timedelta(days=self.day_idx)).timetuple().tm_yday
-        base = 22 + 13 * math.sin((doy - 80) / 365 * 2 * math.pi)
-        return round(base + np.random.normal(0, 1.5), 1)
 
-    def env_humidity(self) -> float:
-        doy  = (date.today() + timedelta(days=self.day_idx)).timetuple().tm_yday
-        base = 65 + 15 * math.sin((doy - 80) / 365 * 2 * math.pi)
-        return round(base + np.random.normal(0, 3.0), 1)
+# ============================================================
+#  Per-window processing
+# ============================================================
 
-
-# ══════════════════════════════════════════════════════
-#  主循环
-# ══════════════════════════════════════════════════════
-
-def process_window(state: DeviceState, conn, window_ts_ms: int):
-    """处理一个 15 分钟窗口：采集 → TDengine，识别 → PostgreSQL behavior"""
+def process_window(state, conn, window_ts_ms):
     si = state.sick_intensity()
 
-    # 1. 生成原始 IMU 数据（模拟设备端采集）
-    raw_samples, segments = generate_window(window_ts_ms, si)
+    # --- IMU: generate raw samples + run behavior recognition ---
+    raw_imu, segments = generate_imu_window(window_ts_ms, si)
 
-    # 2. 写入 TDengine（原始采样点）
-    n_raw = 0
+    n_imu = 0
     try:
-        n_raw = td_insert_batch(state.sn, raw_samples)
+        td_insert_imu(f"{state.sn}", raw_imu)
+        n_imu = len(raw_imu)
     except Exception as e:
-        print(f"    ⚠ TDengine 写入失败: {e}")
+        print(f"    [warn] TDengine IMU write failed: {e}")
 
-    # 3. 写入 PostgreSQL（行为识别结果）
     scratch_in_window = 0
     try:
-        scratch_in_window = pg_insert_behavior(conn, state.sn, segments)
+        scratch_in_window      = pg_insert_behavior(conn, state.sn, segments)
         state.day_scratch_count += scratch_in_window
     except Exception as e:
         conn.rollback()
-        print(f"    ⚠ 行为写入失败: {e}")
+        print(f"    [warn] PG behavior write failed: {e}")
 
-    n_move    = sum(1 for s in segments if s["behavior"] == BEHAVIOR_MOVE)
-    n_sleep   = sum(1 for s in segments if s["behavior"] == BEHAVIOR_SLEEP)
-    n_scratch = scratch_in_window
+    # --- Env + neck temp: generate samples at configured intervals ---
+    env_samples = generate_env_window(window_ts_ms, state.day_idx, si)
 
-    print(f"  [{state.sn}] 窗口 day{state.day_idx}-w{state.window_in_day+1:02d}  "
-          f"原始点={n_raw:5d}  片段={len(segments):3d}"
-          f"（运动{n_move} 睡眠{n_sleep} 抓挠{n_scratch}）  si={si:.2f}")
+    # Keep a running temp average for daily assessment
+    valid_temps = [s[1] for s in env_samples if s[1] is not None]
+    if valid_temps:
+        state.buf_t.append(round(float(np.mean(valid_temps)), 1))
+
+    n_env = 0
+    try:
+        td_insert_env(state.sn, env_samples)
+        n_env = len(env_samples)
+    except Exception as e:
+        print(f"    [warn] TDengine env write failed: {e}")
+
+    n_neck  = sum(1 for s in env_samples if s[3] is not None)
+    n_move  = sum(1 for s in segments if s["behavior"] == BEHAVIOR_MOVE)
+    n_sleep = sum(1 for s in segments if s["behavior"] == BEHAVIOR_SLEEP)
+
+    print(f"  [{state.sn}] "
+          f"day{state.day_idx}-w{state.window_in_day+1:02d}  "
+          f"imu={n_imu:,}pts  "
+          f"segs={len(segments)}(mv{n_move}/sl{n_sleep}/sc{scratch_in_window})  "
+          f"env={n_env}pts neck={n_neck}pts  "
+          f"si={si:.2f}")
 
     state.window_in_day += 1
-
-    # 4. 攒够一天的窗口 → 结算每日评估
     if state.window_in_day >= WINDOWS_PER_DAY:
         state.window_in_day = 0
         settle_day(conn, state)
 
 
+# ============================================================
+#  Main loop
+# ============================================================
+
+def _now_ms():
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
 def main():
-    real_window = WINDOW_MINUTES * 60
-    scale       = real_window / WINDOW_SEC
+    imu_pts_per_window = WINDOW_SECONDS * IMU_SAMPLE_HZ
+    env_pts_per_window = WINDOW_SECONDS // ENV_SAMPLE_INTERVAL
+    neck_pts_per_window = WINDOW_SECONDS // NECK_SAMPLE_INTERVAL
+
     print("=" * 65)
-    print("  宠物项圈双设备模拟器  （15分钟批次管道）")
-    print(f"  sim_device_normal — 全程正常")
-    print(f"  sim_device_sick   — 第{SICK_START_DAY}模拟天起逐步发病")
-    print(f"  IMU 采样率:    {SAMPLE_HZ} Hz")
-    print(f"  窗口时长:      {WINDOW_MINUTES} 分钟 / {SAMPLE_HZ*WINDOW_MINUTES*60:,} 采样点/窗口/设备")
-    print(f"  每天窗口数:    {WINDOWS_PER_DAY} 个")
-    print(f"  加速比:        1 真实秒 ≈ {scale:.0f} 模拟秒  "
-          f"（{WINDOW_SEC}s 真实 = {WINDOW_MINUTES}min 模拟）")
-    print(f"  Ctrl+C 停止")
+    print("  Pet collar dual-device simulator")
+    print(f"  sim_device_normal : always healthy")
+    print(f"  sim_device_sick   : sick from day {SICK_START_DAY}")
+    print()
+    print(f"  Window length      : {WINDOW_MINUTES} min")
+    print(f"  Real wait per win  : {WINDOW_SEC} s")
+    print(f"  Windows per day    : {WINDOWS_PER_DAY}")
+    print()
+    print(f"  IMU sample rate    : {IMU_SAMPLE_HZ} Hz  "
+          f"-> {imu_pts_per_window:,} pts/window")
+    print(f"  Env sample interval: every {ENV_SAMPLE_INTERVAL} s  "
+          f"-> {env_pts_per_window} pts/window")
+    print(f"  Neck temp interval : every {NECK_SAMPLE_INTERVAL} s  "
+          f"-> {neck_pts_per_window} pts/window")
+    print()
+    print("  Ctrl+C to stop")
     print("=" * 65)
 
-    print("\n[初始化] TDengine...")
+    print("\n[init] TDengine...")
     td_init()
-    print("[初始化] PostgreSQL...")
+    print("[init] PostgreSQL...")
     pg_init()
 
-    states = [DeviceState(d["sn"], d["sick"]) for d in DEVICES]
-    conn   = pg_conn()
+    states  = [DeviceState(d["sn"], d["sick"]) for d in DEVICES]
+    conn    = pg_conn()
+    base_ms = _now_ms()
+    win_idx = 0
 
-    # window_ts 用来模拟时间：从当前时刻向后推
-    # 每个窗口按 WINDOW_MINUTES 递增
-    base_ts = _now_ms()
-    window_counter = 0
-
-    print(f"\n[运行中] 每 {WINDOW_SEC}s 处理一个 {WINDOW_MINUTES}min 数据窗口...\n")
+    print(f"\n[running] processing one {WINDOW_MINUTES}-min window every {WINDOW_SEC}s ...\n")
 
     while _running:
-        window_ts_ms = base_ts + window_counter * WINDOW_MINUTES * 60 * 1000
-        window_counter += 1
+        win_ts_ms = base_ms + win_idx * WINDOW_MINUTES * 60 * 1000
+        win_idx  += 1
 
-        print(f"── 窗口 #{window_counter}  "
-              f"模拟时间: {datetime.fromtimestamp(window_ts_ms/1000, tz=timezone.utc).strftime('%m-%d %H:%M')} ──")
+        ts_str = datetime.fromtimestamp(win_ts_ms / 1000, tz=timezone.utc).strftime("%m-%d %H:%M")
+        print(f"-- window #{win_idx}  sim-time {ts_str} --")
 
         for state in states:
-            process_window(state, conn, window_ts_ms)
+            process_window(state, conn, win_ts_ms)
 
-        # 等待下一个窗口
         if _running:
             time.sleep(WINDOW_SEC)
 
     conn.close()
-    print("\n[完成] 模拟器已停止")
-
-
-def _now_ms() -> int:
-    return int(datetime.now(timezone.utc).timestamp() * 1000)
+    print("\n[done] simulator stopped")
 
 
 if __name__ == "__main__":
