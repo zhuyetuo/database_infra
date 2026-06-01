@@ -48,7 +48,7 @@ export WINDOWS_PER_DAY=12
 #                    25Hz × 15min = 22,500 pts/window/device
 #                    50Hz × 15min = 45,000 pts/window/device
 #
-export IMU_SAMPLE_HZ=25
+export IMU_SAMPLE_HZ=50
 
 # ── 环境传感器采样间隔 ─────────────────────────────────────
 #
