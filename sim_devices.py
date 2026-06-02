@@ -5,8 +5,9 @@ Pipeline:
 
   [Device] every WINDOW_MINUTES -> upload a batch
        |
-  [TDengine] imu_raw  - raw IMU samples at IMU_SAMPLE_HZ
-  [TDengine] env_raw  - env/neck-temp samples at ENV_SAMPLE_INTERVAL / NECK_SAMPLE_INTERVAL
+  [TDengine] imu_raw       - raw IMU samples at IMU_SAMPLE_HZ
+  [TDengine] env_raw       - env temp/humidity samples at ENV_SAMPLE_INTERVAL
+  [TDengine] neck_temp_raw - neck temp samples at NECK_SAMPLE_INTERVAL
        |
   [behavior recognition]
        |
@@ -33,7 +34,7 @@ TD_HOST     = os.environ.get("TD_HOST",     "127.0.0.1")
 TD_PORT     = int(os.environ.get("TD_PORT", "6041"))
 TD_USER     = os.environ.get("TD_USER",     "root")
 TD_PASS     = os.environ.get("TD_PASS",     "taosdata")
-IMU_DB      = os.environ.get("IMU_DB",      "pet_dog_imu")
+TD_DB       = os.environ.get("TD_DB",       "pet_collar_raw")
 
 PG_HOST     = os.environ.get("PG_HOST",     "127.0.0.1")
 PG_PORT     = int(os.environ.get("PG_PORT", "5432"))
@@ -103,11 +104,11 @@ def td_exec(sql: str) -> dict:
 
 
 def td_init():
-    td_exec(f"CREATE DATABASE IF NOT EXISTS {IMU_DB} KEEP 3650 DURATION 10 COMP 2")
+    td_exec(f"CREATE DATABASE IF NOT EXISTS {TD_DB} KEEP 3650 DURATION 10 COMP 2")
 
-    # Super table: raw IMU samples (one row = one sample at IMU_SAMPLE_HZ)
+    # Super table: raw IMU samples
     td_exec(f"""
-        CREATE STABLE IF NOT EXISTS {IMU_DB}.imu_raw (
+        CREATE STABLE IF NOT EXISTS {TD_DB}.imu_raw (
             ts  TIMESTAMP,
             ax  FLOAT,
             ay  FLOAT,
@@ -118,22 +119,31 @@ def td_init():
         ) TAGS (device_sn BINARY(64))
     """)
 
-    # Super table: env + neck temp samples
+    # Super table: environment temperature + humidity
     td_exec(f"""
-        CREATE STABLE IF NOT EXISTS {IMU_DB}.env_raw (
+        CREATE STABLE IF NOT EXISTS {TD_DB}.env_raw (
             ts        TIMESTAMP,
             env_temp  FLOAT,
-            env_humi  FLOAT,
+            env_humi  FLOAT
+        ) TAGS (device_sn BINARY(64))
+    """)
+
+    # Super table: neck temperature
+    td_exec(f"""
+        CREATE STABLE IF NOT EXISTS {TD_DB}.neck_temp_raw (
+            ts        TIMESTAMP,
             neck_temp FLOAT
         ) TAGS (device_sn BINARY(64))
     """)
 
     for dev in DEVICES:
         sn = dev["sn"]
-        td_exec(f"CREATE TABLE IF NOT EXISTS {IMU_DB}.imu_{sn} "
-                f"USING {IMU_DB}.imu_raw TAGS ('{sn}')")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {IMU_DB}.env_{sn} "
-                f"USING {IMU_DB}.env_raw TAGS ('{sn}')")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.imu_{sn} "
+                f"USING {TD_DB}.imu_raw TAGS ('{sn}')")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.env_{sn} "
+                f"USING {TD_DB}.env_raw TAGS ('{sn}')")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.neck_{sn} "
+                f"USING {TD_DB}.neck_temp_raw TAGS ('{sn}')")
 
     print("[TDengine] DB & tables ready")
 
@@ -144,21 +154,24 @@ def td_insert_imu(sn: str, samples: list):
     for i in range(0, len(samples), CHUNK):
         c    = samples[i: i + CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]})" for r in c)
-        td_exec(f"INSERT INTO {IMU_DB}.imu_{sn} VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.imu_{sn} VALUES {vals}")
 
 
-def td_insert_env(sn: str, samples: list):
-    """samples: list of (ts_ms, env_temp, env_humi, neck_temp_or_None)"""
-    if not samples:
-        return
+def td_insert_env(sn: str, env_samples: list, neck_samples: list):
+    """
+    env_samples  : list of (ts_ms, env_temp, env_humi)
+    neck_samples : list of (ts_ms, neck_temp)
+    """
     CHUNK = 500
-    for i in range(0, len(samples), CHUNK):
-        c    = samples[i: i + CHUNK]
-        vals = " ".join(
-            f"({r[0]},{r[1]},{r[2]},{r[3] if r[3] is not None else 'NULL'})"
-            for r in c
-        )
-        td_exec(f"INSERT INTO {IMU_DB}.env_{sn} VALUES {vals}")
+    for i in range(0, len(env_samples), CHUNK):
+        c    = env_samples[i: i + CHUNK]
+        vals = " ".join(f"({r[0]},{r[1]},{r[2]})" for r in c)
+        td_exec(f"INSERT INTO {TD_DB}.env_{sn} VALUES {vals}")
+
+    for i in range(0, len(neck_samples), CHUNK):
+        c    = neck_samples[i: i + CHUNK]
+        vals = " ".join(f"({r[0]},{r[1]})" for r in c)
+        td_exec(f"INSERT INTO {TD_DB}.neck_{sn} VALUES {vals}")
 
 
 # ============================================================
@@ -371,39 +384,38 @@ def generate_imu_window(window_start_ms: int, si: float) -> tuple:
     return raw_samples, segments
 
 
-def generate_env_window(window_start_ms: int, day_idx: int, si: float) -> list:
+def generate_env_window(window_start_ms: int, day_idx: int, si: float) -> tuple:
     """
-    Generate env + neck-temp samples for one window.
+    Generate env and neck-temp samples for one window.
 
-    ENV_SAMPLE_INTERVAL  : seconds between env temp/humidity readings
-    NECK_SAMPLE_INTERVAL : seconds between neck temp readings (>= ENV_SAMPLE_INTERVAL)
-
-    Returns list of (ts_ms, env_temp, env_humi, neck_temp_or_None) -> TDengine env_raw
+    Returns:
+      env_samples  - list of (ts_ms, env_temp, env_humi)  -> TDengine env_raw
+      neck_samples - list of (ts_ms, neck_temp)           -> TDengine neck_temp_raw
     """
     doy      = (date.today() + timedelta(days=day_idx)).timetuple().tm_yday
     env_base = 22 + 13 * math.sin((doy - 80) / 365 * 2 * math.pi)
     hum_base = 65 + 15 * math.sin((doy - 80) / 365 * 2 * math.pi)
 
-    samples   = []
-    cursor_s  = 0  # offset in seconds within the window
+    env_samples  = []
+    neck_samples = []
+    cursor_s     = 0
 
     while cursor_s < WINDOW_SECONDS:
         ts_ms    = window_start_ms + cursor_s * 1000
         env_temp = round(env_base + np.random.normal(0, 1.5), 1)
         env_humi = round(hum_base + np.random.normal(0, 3.0), 1)
+        env_samples.append((ts_ms, env_temp, env_humi))
 
-        # neck temp: only sampled at NECK_SAMPLE_INTERVAL
-        neck_temp = None
         if cursor_s % NECK_SAMPLE_INTERVAL == 0:
             if si > 1.3:
                 neck_temp = round(38.5 + np.random.uniform(0.0, 0.8) * (si - 0.3), 2)
             else:
                 neck_temp = round(37.5 + np.random.uniform(-0.3, 0.3), 2)
+            neck_samples.append((ts_ms, neck_temp))
 
-        samples.append((ts_ms, env_temp, env_humi, neck_temp))
         cursor_s += ENV_SAMPLE_INTERVAL
 
-    return samples
+    return env_samples, neck_samples
 
 
 # ============================================================
@@ -613,21 +625,20 @@ def process_window(state, conn, window_ts_ms):
         print(f"    [warn] PG behavior write failed: {e}")
 
     # --- Env + neck temp: generate samples at configured intervals ---
-    env_samples = generate_env_window(window_ts_ms, state.day_idx, si)
+    env_samples, neck_samples = generate_env_window(window_ts_ms, state.day_idx, si)
 
     # Keep a running temp average for daily assessment
-    valid_temps = [s[1] for s in env_samples if s[1] is not None]
-    if valid_temps:
-        state.buf_t.append(round(float(np.mean(valid_temps)), 1))
+    if env_samples:
+        state.buf_t.append(round(float(np.mean([s[1] for s in env_samples])), 1))
 
     n_env = 0
+    n_neck = 0
     try:
-        td_insert_env(state.sn, env_samples)
-        n_env = len(env_samples)
+        td_insert_env(state.sn, env_samples, neck_samples)
+        n_env  = len(env_samples)
+        n_neck = len(neck_samples)
     except Exception as e:
         print(f"    [warn] TDengine env write failed: {e}")
-
-    n_neck  = sum(1 for s in env_samples if s[3] is not None)
     n_move  = sum(1 for s in segments if s["behavior"] == BEHAVIOR_MOVE)
     n_sleep = sum(1 for s in segments if s["behavior"] == BEHAVIOR_SLEEP)
 
