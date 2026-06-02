@@ -71,8 +71,8 @@ BEHAVIOR_SLEEP   = 2
 BEHAVIOR_SCRATCH = 3
 
 DEVICES = [
-    {"sn": "sim_device_normal", "sick": False},
-    {"sn": "sim_device_sick",   "sick": True},
+    {"sn": "device_sn_1", "sick": False},
+    {"sn": "device_sn_2", "sick": True},
 ]
 
 # ============================================================
@@ -138,11 +138,11 @@ def td_init():
 
     for dev in DEVICES:
         sn = dev["sn"]
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.imu_{sn} "
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn}_imu "
                 f"USING {TD_DB}.imu_raw TAGS ('{sn}')")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.env_{sn} "
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn}_env "
                 f"USING {TD_DB}.env_raw TAGS ('{sn}')")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.neck_{sn} "
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn}_neck "
                 f"USING {TD_DB}.neck_temp_raw TAGS ('{sn}')")
 
     print("[TDengine] DB & tables ready")
@@ -154,7 +154,7 @@ def td_insert_imu(sn: str, samples: list):
     for i in range(0, len(samples), CHUNK):
         c    = samples[i: i + CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]})" for r in c)
-        td_exec(f"INSERT INTO {TD_DB}.imu_{sn} VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.{sn}_imu VALUES {vals}")
 
 
 def td_insert_env(sn: str, env_samples: list, neck_samples: list):
@@ -166,12 +166,12 @@ def td_insert_env(sn: str, env_samples: list, neck_samples: list):
     for i in range(0, len(env_samples), CHUNK):
         c    = env_samples[i: i + CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]})" for r in c)
-        td_exec(f"INSERT INTO {TD_DB}.env_{sn} VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.{sn}_env VALUES {vals}")
 
     for i in range(0, len(neck_samples), CHUNK):
         c    = neck_samples[i: i + CHUNK]
         vals = " ".join(f"({r[0]},{r[1]})" for r in c)
-        td_exec(f"INSERT INTO {TD_DB}.neck_{sn} VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.{sn}_neck VALUES {vals}")
 
 
 # ============================================================
