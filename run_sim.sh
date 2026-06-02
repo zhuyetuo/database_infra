@@ -9,7 +9,7 @@ export TD_HOST="127.0.0.1"
 export TD_PORT="6041"
 export TD_USER="root"
 export TD_PASS="taosdata"
-export IMU_DB="pet_dog_imu"
+export TD_DB="pet_collar_raw"
 
 export PG_HOST="127.0.0.1"
 export PG_PORT="5432"
