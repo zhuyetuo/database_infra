@@ -71,8 +71,8 @@ BEHAVIOR_SLEEP   = 2
 BEHAVIOR_SCRATCH = 3
 
 DEVICES = [
-    {"sn": "sim_device_normal", "sick": False},
-    {"sn": "sim_device_sick",   "sick": True},
+    {"sn": "device_sn_1", "sick": False},
+    {"sn": "device_sn_2", "sick": True},
 ]
 
 # ============================================================
@@ -138,11 +138,11 @@ def td_init():
 
     for dev in DEVICES:
         sn = dev["sn"]
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.imu_{sn} "
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn} "
                 f"USING {TD_DB}.imu_raw TAGS ('{sn}')")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.env_{sn} "
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn}_env "
                 f"USING {TD_DB}.env_raw TAGS ('{sn}')")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.neck_{sn} "
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn}_neck "
                 f"USING {TD_DB}.neck_temp_raw TAGS ('{sn}')")
 
     print("[TDengine] DB & tables ready")
