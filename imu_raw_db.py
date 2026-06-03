@@ -24,9 +24,8 @@ TD_PORT      = int(os.environ.get("TD_PORT", "6041"))
 TD_USER      = os.environ.get("TD_USER", "root")
 TD_PASS      = os.environ.get("TD_PASS", "taosdata")
 TD_DB        = os.environ.get("TD_DB",   "pet_collar_raw")
-IMU_SAMPLE_HZ        = int(os.environ.get("IMU_SAMPLE_HZ",        "50"))
-ENV_SAMPLE_INTERVAL  = int(os.environ.get("ENV_SAMPLE_INTERVAL",  "60"))   # 秒
-NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "300"))  # 秒
+IMU_SAMPLE_HZ       = int(os.environ.get("IMU_SAMPLE_HZ",      "50"))
+ENV_SAMPLE_INTERVAL = int(os.environ.get("ENV_SAMPLE_INTERVAL", "60"))   # 秒，ENV 和 NECK 共用
 
 DAYS       = 3      # 验证通过后改为 180
 START_DATE = date(2024, 1, 1)
@@ -251,12 +250,12 @@ def gen_env_day(day_idx: int) -> list:
 
 
 def gen_neck_day(day_idx: int, sick_intensity: float) -> list:
-    """返回 list of (ts_ms, neck_temp)，每 NECK_SAMPLE_INTERVAL 秒一条"""
+    """返回 list of (ts_ms, neck_temp)，每 ENV_SAMPLE_INTERVAL 秒一条"""
     d      = START_DATE + timedelta(days=day_idx)
     day_ts = to_ts(d)
 
     rows = []
-    for s in range(0, 86400, NECK_SAMPLE_INTERVAL):
+    for s in range(0, 86400, ENV_SAMPLE_INTERVAL):
         if sick_intensity > 1.3:
             neck_temp = round(38.5 + np.random.uniform(0.0, 0.8) * (sick_intensity - 0.3), 2)
         else:

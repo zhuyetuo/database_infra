@@ -7,7 +7,7 @@ Pipeline:
        |
   [TDengine] imu_raw       - raw IMU samples at IMU_SAMPLE_HZ
   [TDengine] env_raw       - env temp/humidity samples at ENV_SAMPLE_INTERVAL
-  [TDengine] neck_temp_raw - neck temp samples at NECK_SAMPLE_INTERVAL
+  [TDengine] neck_temp_raw - neck temp samples at ENV_SAMPLE_INTERVAL
        |
   [behavior recognition]
        |
@@ -50,7 +50,6 @@ WINDOWS_PER_DAY = int(os.environ.get("WINDOWS_PER_DAY", "12"))  # windows per si
 # Sampling rates
 IMU_SAMPLE_HZ        = int(os.environ.get("IMU_SAMPLE_HZ",        "25"))   # IMU Hz
 ENV_SAMPLE_INTERVAL  = int(os.environ.get("ENV_SAMPLE_INTERVAL",  "60"))   # env temp/humidity (sec)
-NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "300"))  # neck temp (sec)
 
 # Scenario
 SICK_START_DAY = int(os.environ.get("SICK_START_DAY", "5"))
@@ -406,7 +405,7 @@ def generate_env_window(window_start_ms: int, day_idx: int, si: float) -> tuple:
         env_humi = round(hum_base + np.random.normal(0, 3.0), 1)
         env_samples.append((ts_ms, env_temp, env_humi))
 
-        if cursor_s % NECK_SAMPLE_INTERVAL == 0:
+        if cursor_s % ENV_SAMPLE_INTERVAL == 0:
             if si > 1.3:
                 neck_temp = round(38.5 + np.random.uniform(0.0, 0.8) * (si - 0.3), 2)
             else:
@@ -666,7 +665,7 @@ def _now_ms():
 def main():
     imu_pts_per_window = WINDOW_SECONDS * IMU_SAMPLE_HZ
     env_pts_per_window = WINDOW_SECONDS // ENV_SAMPLE_INTERVAL
-    neck_pts_per_window = WINDOW_SECONDS // NECK_SAMPLE_INTERVAL
+    neck_pts_per_window = WINDOW_SECONDS // ENV_SAMPLE_INTERVAL
 
     print("=" * 65)
     print("  Pet collar dual-device simulator")
@@ -681,7 +680,7 @@ def main():
           f"-> {imu_pts_per_window:,} pts/window")
     print(f"  Env sample interval: every {ENV_SAMPLE_INTERVAL} s  "
           f"-> {env_pts_per_window} pts/window")
-    print(f"  Neck temp interval : every {NECK_SAMPLE_INTERVAL} s  "
+    print(f"  Neck temp interval : every {ENV_SAMPLE_INTERVAL} s  "
           f"-> {neck_pts_per_window} pts/window")
     print()
     print("  Ctrl+C to stop")
