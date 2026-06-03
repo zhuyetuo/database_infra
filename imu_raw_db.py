@@ -11,6 +11,7 @@ neck_temp_raw  {sn}_neck        脖颈温度           每300s
 
 import os
 import math
+import time
 import requests
 import numpy as np
 from datetime import date, timedelta, datetime, timezone
@@ -307,26 +308,28 @@ def init_db():
 #  数据写入
 # ══════════════════════════════════════════════════════
 
+IMU_CHUNK  = 8000
+ENV_CHUNK  = 2000
+NECK_CHUNK = 1000
+
+
 def insert_imu(sn: str, rows: list):
-    CHUNK = 1000
-    for i in range(0, len(rows), CHUNK):
-        b    = rows[i: i + CHUNK]
+    for i in range(0, len(rows), IMU_CHUNK):
+        b    = rows[i: i + IMU_CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]})" for r in b)
         td_exec(f"INSERT INTO {TD_DB}.{sn}_imu VALUES {vals}")
 
 
 def insert_env(sn: str, rows: list):
-    CHUNK = 1000
-    for i in range(0, len(rows), CHUNK):
-        b    = rows[i: i + CHUNK]
+    for i in range(0, len(rows), ENV_CHUNK):
+        b    = rows[i: i + ENV_CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]})" for r in b)
         td_exec(f"INSERT INTO {TD_DB}.{sn}_env VALUES {vals}")
 
 
 def insert_neck(sn: str, rows: list):
-    CHUNK = 1000
-    for i in range(0, len(rows), CHUNK):
-        b    = rows[i: i + CHUNK]
+    for i in range(0, len(rows), NECK_CHUNK):
+        b    = rows[i: i + NECK_CHUNK]
         vals = " ".join(f"({r[0]},{r[1]})" for r in b)
         td_exec(f"INSERT INTO {TD_DB}.{sn}_neck VALUES {vals}")
 
@@ -335,34 +338,54 @@ def insert_neck(sn: str, rows: list):
 #  场景数据生成
 # ══════════════════════════════════════════════════════
 
-def load_scenario(sc: dict, seed: int = 42):
+def _bar(done: int, total: int, width: int = 30) -> str:
+    filled = int(width * done / total)
+    return f"[{'█' * filled}{'░' * (width - filled)}] {done}/{total}"
+
+
+def load_scenario(sc: dict, seed: int = 42, dev_idx: int = 0, dev_total: int = 1):
     sn      = sc['sn']
     gap_map = build_gap_map(sc['gaps'])
     np.random.seed(seed)
 
     imu_total = env_total = neck_total = 0
+    t0 = time.time()
+    gen_s = ins_s = 0.0
 
-    for i in range(DAYS):
-        if i in gap_map:
-            continue
+    valid_days = [i for i in range(DAYS) if i not in gap_map]
 
+    print(f"\n  [{dev_idx+1:>2}/{dev_total}] {sn}")
+    for idx, i in enumerate(valid_days):
         temp        = float(_temperature[i])
         n_scratch   = scratch_count_for_day(i, sc['phases'], temp, sc['tc'])
         sick_intens = 1.8 if is_sick_day(i, sc) else 1.0
 
+        t_gen = time.time()
         imu_rows  = gen_imu_day(i, n_scratch, sick_intens)
         env_rows  = gen_env_day(i)
         neck_rows = gen_neck_day(i, sick_intens)
+        gen_s += time.time() - t_gen
 
+        t_ins = time.time()
         insert_imu(sn, imu_rows)
         insert_env(sn, env_rows)
         insert_neck(sn, neck_rows)
+        ins_s += time.time() - t_ins
 
         imu_total  += len(imu_rows)
         env_total  += len(env_rows)
         neck_total += len(neck_rows)
 
-    print(f"  [{sn}]  imu={imu_total:>12,}  env={env_total:>6,}  neck={neck_total:>5,}")
+        elapsed = time.time() - t0
+        done    = idx + 1
+        eta     = (elapsed / done) * (len(valid_days) - done)
+        bar     = _bar(done, len(valid_days))
+        print(f"\r    {bar}  gen={gen_s:.1f}s ins={ins_s:.1f}s  ETA {eta:.0f}s   ",
+              end="", flush=True)
+
+    elapsed = time.time() - t0
+    print(f"\r    完成  imu={imu_total:>12,}  env={env_total:>6,}  neck={neck_total:>4,}"
+          f"  耗时 {elapsed:.1f}s (生成 {gen_s:.1f}s / 插入 {ins_s:.1f}s)")
 
 
 # ══════════════════════════════════════════════════════
@@ -404,8 +427,10 @@ def main():
     init_db()
 
     print("\n[2] 生成并写入数据...")
+    t_all = time.time()
     for idx, sc in enumerate(SCENARIOS):
-        load_scenario(sc, seed=42 + idx)
+        load_scenario(sc, seed=42 + idx, dev_idx=idx, dev_total=len(SCENARIOS))
+    print(f"\n  全部设备总耗时: {time.time() - t_all:.1f}s")
 
     print("\n[3] 查询验证...")
     query_summary()
