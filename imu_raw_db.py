@@ -17,6 +17,24 @@ import numpy as np
 from datetime import date, timedelta, datetime, timezone
 
 # ══════════════════════════════════════════════════════
+#  加载 sim_config.env
+# ══════════════════════════════════════════════════════
+def _load_config(path: str = "sim_config.env"):
+    here = os.path.dirname(os.path.abspath(__file__))
+    fpath = os.path.join(here, path)
+    if not os.path.exists(fpath):
+        return
+    with open(fpath) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+_load_config()
+
+# ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
 TD_HOST      = os.environ.get("TD_HOST", "127.0.0.1")
