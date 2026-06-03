@@ -52,11 +52,15 @@ export IMU_SAMPLE_HZ=50
 
 # ── 环境传感器采样间隔 ─────────────────────────────────────
 #
-#  ENV_SAMPLE_INTERVAL : 环境温度/湿度 & 脖颈温度的采样间隔（秒）
+#  ENV_SAMPLE_INTERVAL : 环境温度 & 湿度的采样间隔（秒）
 #                        例：60 → 每分钟一个读数
 #                        15min 窗口内采样点数 = 900 / ENV_SAMPLE_INTERVAL
 #
 export ENV_SAMPLE_INTERVAL=60
+
+#  NECK_SAMPLE_INTERVAL : 脖颈温度的采样间隔（秒）
+#
+export NECK_SAMPLE_INTERVAL=60
 
 # ── 场景设置 ───────────────────────────────────────────────
 #
@@ -76,7 +80,7 @@ echo "  每窗口等待   : ${WINDOW_SEC} s (真实时间)"
 echo "  每天窗口数   : ${WINDOWS_PER_DAY}"
 echo "  IMU 采样率   : ${IMU_SAMPLE_HZ} Hz"
 echo "  环境采样间隔 : ${ENV_SAMPLE_INTERVAL} s"
-echo "  颈温采样间隔 : ${ENV_SAMPLE_INTERVAL} s (同环境传感器)"
+echo "  颈温采样间隔 : ${NECK_SAMPLE_INTERVAL} s"
 echo "  发病天数     : day ${SICK_START_DAY}"
 echo "================================================="
 echo ""
