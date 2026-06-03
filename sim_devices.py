@@ -27,8 +27,24 @@ import psycopg2
 import numpy as np
 from datetime import datetime, timezone, date, timedelta
 
+
+def _load_config(path: str = "sim_config.env"):
+    here = os.path.dirname(os.path.abspath(__file__))
+    fpath = os.path.join(here, path)
+    if not os.path.exists(fpath):
+        return
+    with open(fpath) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+_load_config()
+
 # ============================================================
-#  Config from environment variables (set by run_sim.sh)
+#  Config from environment variables
 # ============================================================
 TD_HOST     = os.environ.get("TD_HOST",     "127.0.0.1")
 TD_PORT     = int(os.environ.get("TD_PORT", "6041"))
@@ -50,7 +66,7 @@ WINDOWS_PER_DAY = int(os.environ.get("WINDOWS_PER_DAY", "12"))  # windows per si
 # Sampling rates
 IMU_SAMPLE_HZ        = int(os.environ.get("IMU_SAMPLE_HZ",        "25"))   # IMU Hz
 ENV_SAMPLE_INTERVAL  = int(os.environ.get("ENV_SAMPLE_INTERVAL",  "60"))   # env temp/humidity (sec)
-NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "300"))  # neck temp (sec)
+NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "60"))   # neck temp (sec)
 
 # Scenario
 SICK_START_DAY = int(os.environ.get("SICK_START_DAY", "5"))

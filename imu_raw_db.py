@@ -17,6 +17,24 @@ import numpy as np
 from datetime import date, timedelta, datetime, timezone
 
 # ══════════════════════════════════════════════════════
+#  加载 sim_config.env
+# ══════════════════════════════════════════════════════
+def _load_config(path: str = "sim_config.env"):
+    here = os.path.dirname(os.path.abspath(__file__))
+    fpath = os.path.join(here, path)
+    if not os.path.exists(fpath):
+        return
+    with open(fpath) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+_load_config()
+
+# ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
 TD_HOST      = os.environ.get("TD_HOST", "127.0.0.1")
@@ -25,8 +43,8 @@ TD_USER      = os.environ.get("TD_USER", "root")
 TD_PASS      = os.environ.get("TD_PASS", "taosdata")
 TD_DB        = os.environ.get("TD_DB",   "pet_collar_raw")
 IMU_SAMPLE_HZ        = int(os.environ.get("IMU_SAMPLE_HZ",        "50"))
-ENV_SAMPLE_INTERVAL  = int(os.environ.get("ENV_SAMPLE_INTERVAL",  "60"))   # 秒
-NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "300"))  # 秒
+ENV_SAMPLE_INTERVAL  = int(os.environ.get("ENV_SAMPLE_INTERVAL",  "60"))  # 秒
+NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "60"))  # 秒
 
 DAYS       = 3      # 验证通过后改为 180
 START_DATE = date(2024, 1, 1)
