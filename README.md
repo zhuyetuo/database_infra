@@ -166,7 +166,7 @@ docker compose up -d --build  # 强制重建后启动
 docker exec local-tdengine3 sh -c '
 for n in $(seq 1 24); do
   for suffix in imu env neck; do
-    taos -s "DELETE FROM pet_collar_raw.device_id_${n}_${suffix}"
+    taos -s "DELETE FROM pet_collar_raw.d${n}_${suffix}"
   done
 done
 '
