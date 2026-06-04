@@ -87,8 +87,8 @@ BEHAVIOR_SLEEP   = 2
 BEHAVIOR_SCRATCH = 3
 
 DEVICES = [
-    {"sn": "device_id_1", "sick": False},
-    {"sn": "device_id_2", "sick": True},
+    {"device_id": 1, "sick": False},
+    {"device_id": 2, "sick": True},
 ]
 
 # ============================================================
@@ -132,7 +132,7 @@ def td_init():
             gx  FLOAT,
             gy  FLOAT,
             gz  FLOAT
-        ) TAGS (device_id BINARY(64))
+        ) TAGS (device_id BIGINT)
     """)
 
     # Super table: environment temperature + humidity
@@ -141,7 +141,7 @@ def td_init():
             ts        TIMESTAMP,
             env_temp  FLOAT,
             env_humi  FLOAT
-        ) TAGS (device_id BINARY(64))
+        ) TAGS (device_id BIGINT)
     """)
 
     # Super table: neck temperature
@@ -149,31 +149,31 @@ def td_init():
         CREATE STABLE IF NOT EXISTS {TD_DB}.neck_temp_raw (
             ts        TIMESTAMP,
             neck_temp FLOAT
-        ) TAGS (device_id BINARY(64))
+        ) TAGS (device_id BIGINT)
     """)
 
     for dev in DEVICES:
-        sn = dev["sn"]
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn}_imu "
-                f"USING {TD_DB}.imu_raw TAGS ('{sn}')")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn}_env "
-                f"USING {TD_DB}.env_raw TAGS ('{sn}')")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.{sn}_neck "
-                f"USING {TD_DB}.neck_temp_raw TAGS ('{sn}')")
+        device_id = dev["device_id"]
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.d{device_id}_imu "
+                f"USING {TD_DB}.imu_raw TAGS ({device_id})")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.d{device_id}_env "
+                f"USING {TD_DB}.env_raw TAGS ({device_id})")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.d{device_id}_neck "
+                f"USING {TD_DB}.neck_temp_raw TAGS ({device_id})")
 
     print("[TDengine] DB & tables ready")
 
 
-def td_insert_imu(sn: str, samples: list):
+def td_insert_imu(device_id: int, samples: list):
     """samples: list of (ts_ms, ax, ay, az, gx, gy, gz)"""
     CHUNK = 1000
     for i in range(0, len(samples), CHUNK):
         c    = samples[i: i + CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]})" for r in c)
-        td_exec(f"INSERT INTO {TD_DB}.{sn}_imu VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.d{device_id}_imu VALUES {vals}")
 
 
-def td_insert_env(sn: str, env_samples: list, neck_samples: list):
+def td_insert_env(device_id: int, env_samples: list, neck_samples: list):
     """
     env_samples  : list of (ts_ms, env_temp, env_humi)
     neck_samples : list of (ts_ms, neck_temp)
@@ -182,12 +182,12 @@ def td_insert_env(sn: str, env_samples: list, neck_samples: list):
     for i in range(0, len(env_samples), CHUNK):
         c    = env_samples[i: i + CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]})" for r in c)
-        td_exec(f"INSERT INTO {TD_DB}.{sn}_env VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.d{device_id}_env VALUES {vals}")
 
     for i in range(0, len(neck_samples), CHUNK):
         c    = neck_samples[i: i + CHUNK]
         vals = " ".join(f"({r[0]},{r[1]})" for r in c)
-        td_exec(f"INSERT INTO {TD_DB}.{sn}_neck VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.d{device_id}_neck VALUES {vals}")
 
 
 # ============================================================
@@ -209,11 +209,11 @@ def pg_init():
         cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
 
     for dev in DEVICES:
-        sn = dev["sn"]
+        device_id = dev["device_id"]
 
         # behavior: one row per recognized behavior segment
         cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS pet_dog_behavior.{sn} (
+            CREATE TABLE IF NOT EXISTS pet_dog_behavior.d{device_id} (
                 id           BIGSERIAL     PRIMARY KEY,
                 ts_start     BIGINT        NOT NULL,
                 ts_end       BIGINT        NOT NULL,
@@ -228,11 +228,11 @@ def pg_init():
                 gz_mean      NUMERIC(8,2)
             )
         """)
-        cur.execute(f"CREATE INDEX IF NOT EXISTS {sn}_beh_ts "
-                    f"ON pet_dog_behavior.{sn} (ts_start)")
+        cur.execute(f"CREATE INDEX IF NOT EXISTS d{device_id}_beh_ts "
+                    f"ON pet_dog_behavior.d{device_id} (ts_start)")
 
         cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS pet_dog_skin_assessment.{sn} (
+            CREATE TABLE IF NOT EXISTS pet_dog_skin_assessment.d{device_id} (
                 stat_date        DATE         PRIMARY KEY,
                 scratch_count    INT          NOT NULL DEFAULT 0,
                 baseline_mean    NUMERIC(6,2),
@@ -252,7 +252,7 @@ def pg_init():
         """)
 
         cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS pet_dog_scratch_baseline.{sn} (
+            CREATE TABLE IF NOT EXISTS pet_dog_scratch_baseline.d{device_id} (
                 stat_date     DATE         PRIMARY KEY,
                 baseline_mean NUMERIC(6,2) NOT NULL,
                 baseline_std  NUMERIC(6,2) NOT NULL,
@@ -438,14 +438,14 @@ def generate_env_window(window_start_ms: int, day_idx: int, si: float) -> tuple:
 #  PostgreSQL: write behavior events
 # ============================================================
 
-def pg_insert_behavior(conn, sn: str, segments: list) -> int:
+def pg_insert_behavior(conn, device_id: int, segments: list) -> int:
     """Write behavior segments, return scratch count."""
     if not segments:
         return 0
     cur = conn.cursor()
     cur.executemany(
         f"""
-        INSERT INTO pet_dog_behavior.{sn}
+        INSERT INTO pet_dog_behavior.d{device_id}
             (ts_start, ts_end, behavior, duration_sec, confidence,
              ax_mean, ay_mean, az_mean, gx_mean, gy_mean, gz_mean)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
@@ -497,7 +497,7 @@ def settle_day(conn, state):
     if state.day_idx < WARMUP:
         state.buf_c.append(count)
         cur.execute(
-            f"""INSERT INTO pet_dog_skin_assessment.{state.sn}
+            f"""INSERT INTO pet_dog_skin_assessment.d{state.device_id}
                 (stat_date, scratch_count, eval_phase, data_quality, wear_minutes)
                 VALUES (%s,%s,0,0,%s)
                 ON CONFLICT (stat_date) DO UPDATE
@@ -505,7 +505,7 @@ def settle_day(conn, state):
             (stat_date, count, wear_min),
         )
         conn.commit(); cur.close()
-        print(f"  [{state.sn}] day {state.day_idx:3d} [warmup] scratch={count:3d}")
+        print(f"  [device_id={state.device_id}] day {state.day_idx:3d} [warmup] scratch={count:3d}")
         state.day_scratch_count = 0
         state.day_idx += 1
         return
@@ -541,7 +541,7 @@ def settle_day(conn, state):
               if alert else None)
 
     cur.execute(
-        f"""INSERT INTO pet_dog_skin_assessment.{state.sn}
+        f"""INSERT INTO pet_dog_skin_assessment.d{state.device_id}
             (stat_date, scratch_count, baseline_mean, baseline_std,
              zscore, avg_zscore, consec_abnormal, eval_phase,
              threshold_z, threshold_consec, is_abnormal, alert_triggered,
@@ -565,7 +565,7 @@ def settle_day(conn, state):
 
     confidence = round(min(1.0, state.valid_days / 30), 2)
     cur.execute(
-        f"""INSERT INTO pet_dog_scratch_baseline.{state.sn}
+        f"""INSERT INTO pet_dog_scratch_baseline.d{state.device_id}
             (stat_date, baseline_mean, baseline_std, temp_coef, confidence, valid_days)
             VALUES (%s,%s,%s,%s,%s,%s)
             ON CONFLICT (stat_date) DO UPDATE
@@ -581,7 +581,7 @@ def settle_day(conn, state):
 
     alert_tag = "  !! ALERT" if alert else ""
     abn_tag   = " [ABN]"    if is_abn else ""
-    print(f"  [{state.sn}] day {state.day_idx:3d}  scratch={count:3d}  "
+    print(f"  [{state.device_id}] day {state.day_idx:3d}  scratch={count:3d}  "
           f"z={zscore:+.2f}  baseline={state.mean:.1f}+/-{state.std:.1f}  "
           f"phase={_phase(state.valid_days)}{abn_tag}{alert_tag}")
 
@@ -594,8 +594,8 @@ def settle_day(conn, state):
 # ============================================================
 
 class DeviceState:
-    def __init__(self, sn, is_sick):
-        self.sn             = sn
+    def __init__(self, device_id, is_sick):
+        self.device_id      = device_id
         self.is_sick        = is_sick
         self.day_idx        = 0
         self.window_in_day  = 0
@@ -627,14 +627,14 @@ def process_window(state, conn, window_ts_ms):
 
     n_imu = 0
     try:
-        td_insert_imu(f"{state.sn}", raw_imu)
+        td_insert_imu(state.device_id, raw_imu)
         n_imu = len(raw_imu)
     except Exception as e:
         print(f"    [warn] TDengine IMU write failed: {e}")
 
     scratch_in_window = 0
     try:
-        scratch_in_window      = pg_insert_behavior(conn, state.sn, segments)
+        scratch_in_window      = pg_insert_behavior(conn, state.device_id, segments)
         state.day_scratch_count += scratch_in_window
     except Exception as e:
         conn.rollback()
@@ -650,7 +650,7 @@ def process_window(state, conn, window_ts_ms):
     n_env = 0
     n_neck = 0
     try:
-        td_insert_env(state.sn, env_samples, neck_samples)
+        td_insert_env(state.device_id, env_samples, neck_samples)
         n_env  = len(env_samples)
         n_neck = len(neck_samples)
     except Exception as e:
@@ -658,7 +658,7 @@ def process_window(state, conn, window_ts_ms):
     n_move  = sum(1 for s in segments if s["behavior"] == BEHAVIOR_MOVE)
     n_sleep = sum(1 for s in segments if s["behavior"] == BEHAVIOR_SLEEP)
 
-    print(f"  [{state.sn}] "
+    print(f"  [{state.device_id}] "
           f"day{state.day_idx}-w{state.window_in_day+1:02d}  "
           f"imu={n_imu:,}pts  "
           f"segs={len(segments)}(mv{n_move}/sl{n_sleep}/sc{scratch_in_window})  "
@@ -686,8 +686,8 @@ def main():
 
     print("=" * 65)
     print("  Pet collar dual-device simulator")
-    print(f"  sim_device_normal : always healthy")
-    print(f"  sim_device_sick   : sick from day {SICK_START_DAY}")
+    print(f"  device_id 1 : always healthy")
+    print(f"  device_id 2 : sick from day {SICK_START_DAY}")
     print()
     print(f"  Window length      : {WINDOW_MINUTES} min")
     print(f"  Real wait per win  : {WINDOW_SEC} s")
@@ -708,7 +708,7 @@ def main():
     print("[init] PostgreSQL...")
     pg_init()
 
-    states  = [DeviceState(d["sn"], d["sick"]) for d in DEVICES]
+    states  = [DeviceState(d["device_id"], d["sick"]) for d in DEVICES]
     conn    = pg_conn()
     base_ms = _now_ms()
     win_idx = 0
