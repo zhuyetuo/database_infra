@@ -120,6 +120,61 @@ docker compose up -d --build  # 强制重建后启动
 
 ---
 
+## 清空数据
+
+### TDengine — 删除全部子表数据
+
+```bash
+# 逐表清空（保留表结构）
+for sn in $(seq 1 24); do
+  for suffix in imu env neck; do
+    curl -sf http://127.0.0.1:6041/rest/sql \
+      -d "DELETE FROM pet_collar_raw.device_sn_${sn}_${suffix}" \
+      -u root:taosdata
+  done
+done
+```
+
+```bash
+# 或直接删除整个数据库（含所有表）再重建
+curl -sf http://127.0.0.1:6041/rest/sql \
+  -d 'DROP DATABASE IF EXISTS pet_collar_raw' \
+  -u root:taosdata
+```
+
+### PostgreSQL — 删除全部子表数据
+
+```sql
+-- 连接到 pet_collar 数据库后执行
+
+-- 行为事件
+DO $$ DECLARE t TEXT; BEGIN
+  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_behavior'
+  LOOP EXECUTE 'TRUNCATE TABLE pet_dog_behavior.' || t; END LOOP;
+END $$;
+
+-- 皮肤评估
+DO $$ DECLARE t TEXT; BEGIN
+  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_skin_assessment'
+  LOOP EXECUTE 'TRUNCATE TABLE pet_dog_skin_assessment.' || t; END LOOP;
+END $$;
+
+-- 抓挠基线
+DO $$ DECLARE t TEXT; BEGIN
+  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_scratch_baseline'
+  LOOP EXECUTE 'TRUNCATE TABLE pet_dog_scratch_baseline.' || t; END LOOP;
+END $$;
+```
+
+```sql
+-- 或直接删除整个 schema（含所有表）再重建
+DROP SCHEMA IF EXISTS pet_dog_behavior CASCADE;
+DROP SCHEMA IF EXISTS pet_dog_skin_assessment CASCADE;
+DROP SCHEMA IF EXISTS pet_dog_scratch_baseline CASCADE;
+```
+
+---
+
 ## 连接信息
 
 ### PostgreSQL
