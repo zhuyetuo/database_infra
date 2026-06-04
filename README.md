@@ -163,13 +163,13 @@ docker compose up -d --build  # 强制重建后启动
 
 ```bash
 # 逐表清空（保留表结构）
-docker exec local-tdengine3 sh -c "
-for n in \$(seq 1 24); do
+docker exec local-tdengine3 sh -c '
+for n in $(seq 1 24); do
   for suffix in imu env neck; do
-    taos -s 'DELETE FROM pet_collar_raw.device_id_\${n}_\${suffix}'
+    taos -s "DELETE FROM pet_collar_raw.device_id_${n}_${suffix}"
   done
 done
-"
+'
 ```
 
 ```bash
