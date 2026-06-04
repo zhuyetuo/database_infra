@@ -144,33 +144,31 @@ curl -sf http://127.0.0.1:6041/rest/sql \
 
 ### PostgreSQL — 删除全部子表数据
 
-```sql
--- 连接到 pet_collar 数据库后执行
-
--- 行为事件
+```bash
+# 逐表清空（保留表结构）
+docker exec -i local-postgres16 psql -U postgres -d pet_collar <<'EOF'
 DO $$ DECLARE t TEXT; BEGIN
   FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_behavior'
   LOOP EXECUTE 'TRUNCATE TABLE pet_dog_behavior.' || t; END LOOP;
 END $$;
-
--- 皮肤评估
 DO $$ DECLARE t TEXT; BEGIN
   FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_skin_assessment'
   LOOP EXECUTE 'TRUNCATE TABLE pet_dog_skin_assessment.' || t; END LOOP;
 END $$;
-
--- 抓挠基线
 DO $$ DECLARE t TEXT; BEGIN
   FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_scratch_baseline'
   LOOP EXECUTE 'TRUNCATE TABLE pet_dog_scratch_baseline.' || t; END LOOP;
 END $$;
+EOF
 ```
 
-```sql
--- 或直接删除整个 schema（含所有表）再重建
+```bash
+# 或直接删除整个 schema（含所有表）再重建
+docker exec -i local-postgres16 psql -U postgres -d pet_collar <<'EOF'
 DROP SCHEMA IF EXISTS pet_dog_behavior CASCADE;
 DROP SCHEMA IF EXISTS pet_dog_skin_assessment CASCADE;
 DROP SCHEMA IF EXISTS pet_dog_scratch_baseline CASCADE;
+EOF
 ```
 
 ---
