@@ -152,6 +152,10 @@ DO $$ DECLARE t TEXT; BEGIN
   LOOP EXECUTE 'TRUNCATE TABLE pet_dog_behavior.' || t; END LOOP;
 END $$;
 DO $$ DECLARE t TEXT; BEGIN
+  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_environment'
+  LOOP EXECUTE 'TRUNCATE TABLE pet_dog_environment.' || t; END LOOP;
+END $$;
+DO $$ DECLARE t TEXT; BEGIN
   FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_skin_assessment'
   LOOP EXECUTE 'TRUNCATE TABLE pet_dog_skin_assessment.' || t; END LOOP;
 END $$;
@@ -166,6 +170,7 @@ EOF
 # 或直接删除整个 schema（含所有表）再重建
 docker exec -i local-postgres16 psql -U postgres -d pet_collar <<'EOF'
 DROP SCHEMA IF EXISTS pet_dog_behavior CASCADE;
+DROP SCHEMA IF EXISTS pet_dog_environment CASCADE;
 DROP SCHEMA IF EXISTS pet_dog_skin_assessment CASCADE;
 DROP SCHEMA IF EXISTS pet_dog_scratch_baseline CASCADE;
 EOF
