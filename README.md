@@ -173,6 +173,8 @@ DROP SCHEMA IF EXISTS pet_dog_behavior CASCADE;
 DROP SCHEMA IF EXISTS pet_dog_environment CASCADE;
 DROP SCHEMA IF EXISTS pet_dog_skin_assessment CASCADE;
 DROP SCHEMA IF EXISTS pet_dog_scratch_baseline CASCADE;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
 EOF
 ```
 
