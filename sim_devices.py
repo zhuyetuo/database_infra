@@ -87,8 +87,8 @@ BEHAVIOR_SLEEP   = 2
 BEHAVIOR_SCRATCH = 3
 
 DEVICES = [
-    {"sn": "device_sn_1", "sick": False},
-    {"sn": "device_sn_2", "sick": True},
+    {"sn": "device_id_1", "sick": False},
+    {"sn": "device_id_2", "sick": True},
 ]
 
 # ============================================================
@@ -132,7 +132,7 @@ def td_init():
             gx  FLOAT,
             gy  FLOAT,
             gz  FLOAT
-        ) TAGS (device_sn BINARY(64))
+        ) TAGS (device_id BINARY(64))
     """)
 
     # Super table: environment temperature + humidity
@@ -141,7 +141,7 @@ def td_init():
             ts        TIMESTAMP,
             env_temp  FLOAT,
             env_humi  FLOAT
-        ) TAGS (device_sn BINARY(64))
+        ) TAGS (device_id BINARY(64))
     """)
 
     # Super table: neck temperature
@@ -149,7 +149,7 @@ def td_init():
         CREATE STABLE IF NOT EXISTS {TD_DB}.neck_temp_raw (
             ts        TIMESTAMP,
             neck_temp FLOAT
-        ) TAGS (device_sn BINARY(64))
+        ) TAGS (device_id BINARY(64))
     """)
 
     for dev in DEVICES:

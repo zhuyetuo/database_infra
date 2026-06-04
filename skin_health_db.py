@@ -31,7 +31,7 @@ def create_table():
 
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {PG_SCHEMA}.pet_skin_health_daily (
-          device_sn           VARCHAR(64)   NOT NULL,
+          device_id           VARCHAR(64)   NOT NULL,
           stat_date_ts        BIGINT        NOT NULL,
           scratch_count       SMALLINT      NOT NULL DEFAULT 0,
           scratch_duration    INT           NOT NULL DEFAULT 0,
@@ -59,12 +59,12 @@ def create_table():
           wear_minutes        SMALLINT      NOT NULL DEFAULT 0,
           created_at          BIGINT        NOT NULL,
           updated_at          BIGINT        NOT NULL,
-          PRIMARY KEY (device_sn, stat_date_ts)
+          PRIMARY KEY (device_id, stat_date_ts)
         )
     """)
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_alert    ON {PG_SCHEMA}.pet_skin_health_daily (device_sn, alert_triggered, stat_date_ts)")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_abnormal ON {PG_SCHEMA}.pet_skin_health_daily (device_sn, is_abnormal, stat_date_ts)")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_quality  ON {PG_SCHEMA}.pet_skin_health_daily (device_sn, data_quality, stat_date_ts)")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_alert    ON {PG_SCHEMA}.pet_skin_health_daily (device_id, alert_triggered, stat_date_ts)")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_abnormal ON {PG_SCHEMA}.pet_skin_health_daily (device_id, is_abnormal, stat_date_ts)")
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_quality  ON {PG_SCHEMA}.pet_skin_health_daily (device_id, data_quality, stat_date_ts)")
 
     conn.commit()
     cursor.close()
@@ -394,7 +394,7 @@ def insert_data(rows):
 
     sql = f"""
         INSERT INTO {PG_SCHEMA}.pet_skin_health_daily
-          (device_sn, stat_date_ts,
+          (device_id, stat_date_ts,
            scratch_count, scratch_duration, scratch_avg_dur,
            scratch_max_dur, night_scratch_count,
            avg_temperature, avg_humidity,
@@ -428,7 +428,7 @@ def query_data():
     print("\n======= 各设备记录概况 =======")
     cursor.execute(f"""
         SELECT
-            device_sn,
+            device_id,
             COUNT(*)                                    AS 总天数,
             SUM(is_abnormal)                            AS 异常天,
             SUM(alert_triggered)                        AS 推送次数,
@@ -439,8 +439,8 @@ def query_data():
             to_char(to_timestamp(MIN(stat_date_ts)/1000), 'YYYY-MM-DD') AS 最早统计日,
             to_char(to_timestamp(MAX(stat_date_ts)/1000), 'YYYY-MM-DD') AS 最晚统计日
         FROM {PG_SCHEMA}.pet_skin_health_daily
-        GROUP BY device_sn
-        ORDER BY device_sn
+        GROUP BY device_id
+        ORDER BY device_id
     """)
     for row in cursor.fetchall():
         print(row)
@@ -448,13 +448,13 @@ def query_data():
     print("\n======= 推送记录明细 =======")
     cursor.execute(f"""
         SELECT
-            device_sn,
+            device_id,
             to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             scratch_count, zscore, avg_zscore,
             consec_abnormal, alert_reason
         FROM {PG_SCHEMA}.pet_skin_health_daily
         WHERE alert_triggered = 1
-        ORDER BY device_sn, stat_date_ts
+        ORDER BY device_id, stat_date_ts
     """)
     rows = cursor.fetchall()
     if rows:
@@ -466,7 +466,7 @@ def query_data():
     print("\n======= 缺口与缓冲天 =======")
     cursor.execute(f"""
         SELECT
-            device_sn,
+            device_id,
             to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             CASE data_quality
                 WHEN 1 THEN '未佩戴'
@@ -478,7 +478,7 @@ def query_data():
             wear_minutes
         FROM {PG_SCHEMA}.pet_skin_health_daily
         WHERE data_quality > 0
-        ORDER BY device_sn, stat_date_ts
+        ORDER BY device_id, stat_date_ts
     """)
     for row in cursor.fetchall():
         print(row)
@@ -492,7 +492,7 @@ def query_data():
             scratch_count, baseline_mean,
             zscore, consec_abnormal, is_abnormal, alert_triggered
         FROM {PG_SCHEMA}.pet_skin_health_daily
-        WHERE device_sn = 'DEV_002_SICK'
+        WHERE device_id = 'DEV_002_SICK'
           AND stat_date_ts BETWEEN %s AND %s
         ORDER BY stat_date_ts
     """, (ts_start, ts_end))
@@ -506,7 +506,7 @@ def query_data():
             valid_days, eval_phase,
             threshold_z, threshold_consec, threshold_avgz
         FROM {PG_SCHEMA}.pet_skin_health_daily
-        WHERE device_sn = 'DEV_001_NORMAL'
+        WHERE device_id = 'DEV_001_NORMAL'
         ORDER BY stat_date_ts
         LIMIT 20
     """)

@@ -23,7 +23,7 @@ def create_table():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS `pet_behavior_record` (
-          `device_sn`       varchar(64)  NOT NULL
+          `device_id`       varchar(64)  NOT NULL
                             COMMENT '设备序列号',
           `behavior_type`   tinyint      NOT NULL
                             COMMENT '行为种类（0:未知 1:运动 2:睡眠 3:抓挠）',
@@ -35,9 +35,9 @@ def create_table():
                             COMMENT '行为结束时间 UTC 毫秒时间戳',
           `confidence`      decimal(4,2) NOT NULL DEFAULT '0.00'
                             COMMENT '置信度（0.00-1.00）',
-          PRIMARY KEY (`device_sn`, `start_time`),
+          PRIMARY KEY (`device_id`, `start_time`),
           KEY `idx_behavior_type` (`behavior_type`),
-          KEY `idx_device_time`   (`device_sn`, `start_time`, `end_time`)
+          KEY `idx_device_time`   (`device_id`, `start_time`, `end_time`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
           COMMENT='宠物行为推理结果表';
     """)
@@ -86,7 +86,7 @@ def safe_conf(v: float) -> float:
 # 3. 生成伪数据
 # ======================================
 
-def gen_day_behaviors(device_sn: str, day: date, scratch_count: int):
+def gen_day_behaviors(device_id: str, day: date, scratch_count: int):
     """
     为某只狗某天生成一天的行为记录
     策略：
@@ -136,7 +136,7 @@ def gen_day_behaviors(device_sn: str, day: date, scratch_count: int):
                 conf = safe_conf(np.random.normal(0.88, 0.06))
 
                 records.append((
-                    device_sn,
+                    device_id,
                     BEHAVIOR_SCRATCH,
                     None,   # behavior_detail 第二阶段启用
                     s_ts,
@@ -168,7 +168,7 @@ def gen_day_behaviors(device_sn: str, day: date, scratch_count: int):
                 conf = safe_conf(np.random.normal(0.85, 0.07))
 
                 records.append((
-                    device_sn,
+                    device_id,
                     btype,
                     None,
                     s_ts,
@@ -233,7 +233,7 @@ def insert_data(rows):
 
     sql = """
         INSERT IGNORE INTO `pet_behavior_record`
-          (`device_sn`, `behavior_type`, `behavior_detail`,
+          (`device_id`, `behavior_type`, `behavior_detail`,
            `start_time`, `end_time`, `confidence`)
         VALUES (%s, %s, %s, %s, %s, %s)
     """
@@ -262,7 +262,7 @@ def query_data():
     print("\n======= 各设备行为记录概况 =======")
     cursor.execute("""
         SELECT
-            device_sn,
+            device_id,
             COUNT(*)                                      AS 总记录数,
             SUM(behavior_type = 1)                        AS 运动次数,
             SUM(behavior_type = 2)                        AS 睡眠次数,
@@ -274,8 +274,8 @@ def query_data():
             FROM_UNIXTIME(MIN(start_time) / 1000)         AS 最早记录,
             FROM_UNIXTIME(MAX(end_time)   / 1000)         AS 最晚记录
         FROM pet_behavior_record
-        GROUP BY device_sn
-        ORDER BY device_sn
+        GROUP BY device_id
+        ORDER BY device_id
     """)
     for row in cursor.fetchall():
         print(row)
@@ -287,7 +287,7 @@ def query_data():
             COUNT(*)                                 AS 当日抓挠次数,
             ROUND(AVG(end_time - start_time) / 1000, 1) AS 平均时长秒
         FROM pet_behavior_record
-        WHERE device_sn = 'DEV_002_SICK'
+        WHERE device_id = 'DEV_002_SICK'
           AND behavior_type = 3
         GROUP BY DATE(FROM_UNIXTIME(start_time / 1000))
         ORDER BY 日期
@@ -298,13 +298,13 @@ def query_data():
     print("\n======= 抓挠记录明细（DEV_001 前10条）=======")
     cursor.execute("""
         SELECT
-            device_sn,
+            device_id,
             FROM_UNIXTIME(start_time / 1000)            AS 开始时间,
             FROM_UNIXTIME(end_time   / 1000)            AS 结束时间,
             ROUND((end_time - start_time) / 1000, 2)    AS 持续秒,
             confidence
         FROM pet_behavior_record
-        WHERE device_sn = 'DEV_001_NORMAL'
+        WHERE device_id = 'DEV_001_NORMAL'
           AND behavior_type = 3
         ORDER BY start_time
         LIMIT 10
@@ -318,7 +318,7 @@ def query_data():
             DATE(FROM_UNIXTIME(start_time / 1000)) AS 日期,
             COUNT(*)                                AS 记录数
         FROM pet_behavior_record
-        WHERE device_sn = 'DEV_004_GAP'
+        WHERE device_id = 'DEV_004_GAP'
         GROUP BY DATE(FROM_UNIXTIME(start_time / 1000))
         ORDER BY 日期
     """)
