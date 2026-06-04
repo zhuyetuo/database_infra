@@ -163,20 +163,18 @@ docker compose up -d --build  # 强制重建后启动
 
 ```bash
 # 逐表清空（保留表结构）
-for sn in $(seq 1 24); do
+docker exec local-tdengine3 sh -c "
+for n in \$(seq 1 24); do
   for suffix in imu env neck; do
-    curl -sf http://127.0.0.1:6041/rest/sql \
-      -d "DELETE FROM pet_collar_raw.device_id_${sn}_${suffix}" \
-      -u root:taosdata
+    taos -s 'DELETE FROM pet_collar_raw.device_id_\${n}_\${suffix}'
   done
 done
+"
 ```
 
 ```bash
 # 或直接删除整个数据库（含所有表）再重建
-curl -sf http://127.0.0.1:6041/rest/sql \
-  -d 'DROP DATABASE IF EXISTS pet_collar_raw' \
-  -u root:taosdata
+docker exec local-tdengine3 taos -s 'DROP DATABASE IF EXISTS pet_collar_raw'
 ```
 
 ### PostgreSQL — 删除全部子表数据
