@@ -9,10 +9,14 @@
 ```
 database_infra/
 ├── docker-compose.yml        # PostgreSQL + TDengine 容器配置
-├── .env                      # 环境变量（PostgreSQL 密码、默认库名）
+├── .env                      # 容器环境变量（PostgreSQL 密码、默认库名）
+├── sim_config.env            # 模拟器统一配置（采样率、窗口时长、数据库连接等）
 ├── postgres-data/            # PostgreSQL 数据持久化目录（自动创建）
 ├── tdengine-data/            # TDengine 数据持久化目录（自动创建）
-├── imu_raw_db.py             # 创建 pet_dog_imu 库（TDengine）+ 生成 IMU 原始事件数据
+├── imu_raw_db.py             # TDengine 批量写入：IMU / 环境温湿度 / 颈温原始采样点（24 设备 × 180 天）
+├── pg_seed.py                # PostgreSQL 初始化：pet_device schema、用户表、设备绑定历史
+├── sim_devices.py            # 实时模拟器：双设备持续生成传感器数据写入 TDengine + PostgreSQL
+├── run_sim.sh                # 模拟器启动脚本（source sim_config.env 后运行 sim_devices.py）
 ├── environment_db.py         # 创建 pet_dog_environment 模式（PostgreSQL）+ 生成环境传感器数据
 ├── behavior_db.py            # 创建 pet_dog_behavior 模式（PostgreSQL）+ 生成行为识别事件数据
 ├── skin_assessment_db.py     # 创建 pet_dog_skin_assessment 模式（PostgreSQL）+ 生成皮肤健康评估数据
@@ -39,23 +43,56 @@ docker ps
 # STATUS 显示 (healthy) 即可连接
 ```
 
-### 2. 写入模拟数据
-
-按顺序执行（各脚本可独立运行，互不依赖）：
+### 2. 初始化应用数据（用户 & 设备绑定）
 
 ```bash
-python imu_raw_db.py            # 写入 pet_dog_imu（IMU 原始事件，TDengine）
-python environment_db.py        # 写入 pet_dog_environment（环境传感器，PostgreSQL）
-python behavior_db.py           # 写入 pet_dog_behavior（行为识别事件，PostgreSQL）
-python skin_assessment_db.py    # 写入 pet_dog_skin_assessment（皮肤健康评估，PostgreSQL）
-python scratch_baseline_db.py   # 写入 pet_dog_scratch_baseline（抓挠基线快照，PostgreSQL）
+python pg_seed.py
 ```
 
-或使用重置脚本（会重启容器并清除旧数据）：
+在 PostgreSQL `pet_collar` 数据库的 `pet_device` schema 下建表并写入种子数据：
+
+**用户分布（12 人）**
+
+| 用户 | 姓名 | 国家 | 时区 | 设备数 |
+|------|------|------|------|--------|
+| user_1  | James Wilson      | US | America/New_York     | 2 台 |
+| user_2  | Emma Johnson      | US | America/Chicago      | 3 台 |
+| user_3  | Michael Brown     | US | America/Los_Angeles  | 2 台 |
+| user_4  | Lisa Anderson     | US | America/Denver       | 1 台 |
+| user_5  | Sarah Davis       | CA | America/Toronto      | 2 台 |
+| user_6  | Oliver Smith      | GB | Europe/London        | 3 台 |
+| user_7  | Thomas Baker      | GB | Europe/London        | 2 台 |
+| user_8  | Sophie Martin     | FR | Europe/Paris         | 2 台 |
+| user_9  | Anna Müller       | DE | Europe/Berlin        | 2 台 |
+| user_10 | Luca Rossi        | IT | Europe/Rome          | 1 台 |
+| user_11 | Carlos García     | ES | Europe/Madrid        | 2 台 |
+| user_12 | Nina Berg         | NL | Europe/Amsterdam     | 2 台 |
+
+**设备绑定（24 台）**：每台设备绑定一只宠物（`pet_id` = `device_id`），`bind_status=1`（active），绑定时间为模拟数据起始日 2024-01-01。
+
+### 3. 写入传感器原始数据（TDengine）
 
 ```bash
-bash reset_and_load.sh
+python imu_raw_db.py
 ```
+
+向 TDengine `pet_collar_raw` 数据库写入 24 个设备的原始采样数据：
+
+| 超级表 | 子表 | 内容 | 采样率 |
+|--------|------|------|--------|
+| `imu_raw` | `device_sn_N_imu` | IMU 6轴 | 50 Hz |
+| `env_raw` | `device_sn_N_env` | 环境温湿度 | 每 60s |
+| `neck_temp_raw` | `device_sn_N_neck` | 颈部温度 | 每 60s |
+
+> 默认写入 3 天数据用于验证。验证通过后将 `imu_raw_db.py` 中 `DAYS = 3` 改为 `DAYS = 180` 再重新运行。
+
+### 4. 启动实时模拟器
+
+```bash
+bash run_sim.sh
+```
+
+持续模拟两台设备实时上传数据，Ctrl+C 停止。所有参数在 `sim_config.env` 中修改。
 
 ### 3. 生成可视化图表
 
