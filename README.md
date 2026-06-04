@@ -50,8 +50,25 @@ python pg_seed.py
 ```
 
 在 PostgreSQL `pet_collar` 数据库的 `pet_device` schema 下建表并写入种子数据：
-- **12 个用户**，覆盖欧美主要时区（US/CA/GB/FR/DE/IT/ES/NL）
-- **24 条设备绑定记录**，每台设备绑定一只宠物，部分用户拥有多台设备
+
+**用户分布（12 人）**
+
+| 用户 | 姓名 | 国家 | 时区 | 设备数 |
+|------|------|------|------|--------|
+| user_1  | James Wilson      | US | America/New_York     | 2 台 |
+| user_2  | Emma Johnson      | US | America/Chicago      | 3 台 |
+| user_3  | Michael Brown     | US | America/Los_Angeles  | 2 台 |
+| user_4  | Lisa Anderson     | US | America/Denver       | 1 台 |
+| user_5  | Sarah Davis       | CA | America/Toronto      | 2 台 |
+| user_6  | Oliver Smith      | GB | Europe/London        | 3 台 |
+| user_7  | Thomas Baker      | GB | Europe/London        | 2 台 |
+| user_8  | Sophie Martin     | FR | Europe/Paris         | 2 台 |
+| user_9  | Anna Müller       | DE | Europe/Berlin        | 2 台 |
+| user_10 | Luca Rossi        | IT | Europe/Rome          | 1 台 |
+| user_11 | Carlos García     | ES | Europe/Madrid        | 2 台 |
+| user_12 | Nina Berg         | NL | Europe/Amsterdam     | 2 台 |
+
+**设备绑定（24 台）**：每台设备绑定一只宠物（`pet_id` = `device_id`），`bind_status=1`（active），绑定时间为模拟数据起始日 2024-01-01。
 
 ### 3. 写入传感器原始数据（TDengine）
 
