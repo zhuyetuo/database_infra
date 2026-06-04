@@ -23,7 +23,7 @@ def create_table():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS `pet_skin_baseline` (
-          `device_sn`       varchar(64)   NOT NULL
+          `device_id`       varchar(64)   NOT NULL
                             COMMENT '设备序列号',
           `baseline_mean`   decimal(6,2)  NOT NULL
                             COMMENT '抓挠次数基线均值（次/天）',
@@ -41,7 +41,7 @@ def create_table():
                             COMMENT '基线最后更新时间 UTC 毫秒时间戳',
           `created_at`      bigint        NOT NULL
                             COMMENT '首次创建时间 UTC 毫秒时间戳',
-          PRIMARY KEY (`device_sn`)
+          PRIMARY KEY (`device_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
           COMMENT='宠物抓挠个体基线表（每只狗一条，滚动更新）';
     """)
@@ -93,7 +93,7 @@ def calc_temp_coef(counts: list, temps: list) -> float:
 #    重新计算基线并写入 pet_skin_baseline
 # ======================================
 
-def compute_and_upsert_baseline(device_sn: str, conn):
+def compute_and_upsert_baseline(device_id: str, conn):
     """
     从 pet_skin_health_daily 取这只狗过去30天的正常天数据
     重新计算 baseline_mean / baseline_std / temp_coef
@@ -105,17 +105,17 @@ def compute_and_upsert_baseline(device_sn: str, conn):
     cursor.execute("""
         SELECT scratch_count, avg_temperature, valid_days
         FROM pet_skin_health_daily
-        WHERE device_sn = %s
+        WHERE device_id = %s
           AND data_quality = 0
           AND is_abnormal  = 0
           AND in_warmup_flag = 0
         ORDER BY stat_date_ts DESC
         LIMIT 30
-    """, (device_sn,))
+    """, (device_id,))
     rows = cursor.fetchall()
 
     if not rows:
-        print(f"  [{device_sn}] 无有效数据，跳过")
+        print(f"  [{device_id}] 无有效数据，跳过")
         cursor.close()
         return
 
@@ -133,7 +133,7 @@ def compute_and_upsert_baseline(device_sn: str, conn):
 
     cursor.execute("""
         INSERT INTO `pet_skin_baseline`
-          (`device_sn`, `baseline_mean`, `baseline_std`, `temp_coef`,
+          (`device_id`, `baseline_mean`, `baseline_std`, `temp_coef`,
            `valid_days`, `eval_phase`, `confidence`,
            `last_updated_ts`, `created_at`)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -146,13 +146,13 @@ def compute_and_upsert_baseline(device_sn: str, conn):
           `confidence`      = VALUES(`confidence`),
           `last_updated_ts` = VALUES(`last_updated_ts`)
     """, (
-        device_sn, mean_val, std_val, coef_val,
+        device_id, mean_val, std_val, coef_val,
         valid_days, phase, confidence,
         ts, ts
     ))
 
     conn.commit()
-    print(f"  [{device_sn}] 基线更新完成  "
+    print(f"  [{device_id}] 基线更新完成  "
           f"均值={mean_val}  标准差={std_val}  "
           f"温度系数={coef_val}  有效天={valid_days}  "
           f"置信度={confidence}  阶段={phase}")
@@ -173,7 +173,7 @@ def insert_seed_data():
     cursor = conn.cursor()
     ts     = now_ts()
 
-    # (device_sn, mean, std, temp_coef, valid_days)
+    # (device_id, mean, std, temp_coef, valid_days)
     devices = [
         ('DEV_001_NORMAL', 9.8,  2.1, 0.08,  30),   # 稳定期，基线成熟
         ('DEV_002_SICK',   9.2,  2.3, 0.10,  22),   # 过渡期，刚康复
@@ -183,7 +183,7 @@ def insert_seed_data():
 
     sql = """
         INSERT INTO `pet_skin_baseline`
-          (`device_sn`, `baseline_mean`, `baseline_std`, `temp_coef`,
+          (`device_id`, `baseline_mean`, `baseline_std`, `temp_coef`,
            `valid_days`, `eval_phase`, `confidence`,
            `last_updated_ts`, `created_at`)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -242,7 +242,7 @@ def refresh_all_baselines():
     has_flag = cursor.fetchone() is not None
 
     # 取所有设备
-    cursor.execute("SELECT DISTINCT device_sn FROM pet_skin_health_daily")
+    cursor.execute("SELECT DISTINCT device_id FROM pet_skin_health_daily")
     device_list = [r[0] for r in cursor.fetchall()]
     cursor.close()
 
@@ -260,7 +260,7 @@ def refresh_all_baselines():
         c2.execute(f"""
             SELECT scratch_count, avg_temperature, valid_days
             FROM pet_skin_health_daily
-            WHERE device_sn = %s
+            WHERE device_id = %s
               AND data_quality = 0
               AND is_abnormal  = 0
               {where_extra}
@@ -289,7 +289,7 @@ def refresh_all_baselines():
         c3 = conn.cursor()
         c3.execute("""
             INSERT INTO `pet_skin_baseline`
-              (`device_sn`, `baseline_mean`, `baseline_std`, `temp_coef`,
+              (`device_id`, `baseline_mean`, `baseline_std`, `temp_coef`,
                `valid_days`, `eval_phase`, `confidence`,
                `last_updated_ts`, `created_at`)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -326,7 +326,7 @@ def query_data():
     print("\n======= 所有设备基线状态 =======")
     cursor.execute("""
         SELECT
-            device_sn,
+            device_id,
             baseline_mean,
             baseline_std,
             temp_coef,
@@ -340,7 +340,7 @@ def query_data():
             confidence                                AS 置信度,
             FROM_UNIXTIME(last_updated_ts / 1000)     AS 最后更新时间
         FROM pet_skin_baseline
-        ORDER BY device_sn
+        ORDER BY device_id
     """)
     for row in cursor.fetchall():
         print(row)
@@ -348,7 +348,7 @@ def query_data():
     print("\n======= 置信度说明 =======")
     cursor.execute("""
         SELECT
-            device_sn,
+            device_id,
             valid_days,
             confidence,
             CASE

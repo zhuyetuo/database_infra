@@ -2,7 +2,7 @@
 抓挠基线数据库（PostgreSQL）
 =====================
 数据库: pet_collar，模式: pet_dog_scratch_baseline
-每个设备独立一张表: {device_sn}
+每个设备独立一张表: {device_id}
 
 每行 = 当天算法运行后的基线快照
   stat_date      统计日期
@@ -81,28 +81,28 @@ np.random.seed(42)
 SCENARIOS = [
     # 健康场景 1-9
     {
-        'sn':     'device_sn_1',
+        'sn':     'device_id_1',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_2',
+        'sn':     'device_id_2',
         'phases': [(0, 60, 10.0, 2.0), (60, 80, 30.0, 4.0), (80, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (60, 80),
     },
     {
-        'sn':     'device_sn_3',
+        'sn':     'device_id_3',
         'phases': [(0, 60, 10.0, 2.0), (60, 180, 28.0, 4.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (60, 180),
     },
     {
-        'sn':          'device_sn_4',
+        'sn':          'device_id_4',
         'phases':      [(0, 40, 10.0, 2.0), (40, 55, 28.0, 4.0),
                         (55, 120, 10.0, 2.0), (120, 135, 30.0, 4.0),
                         (135, 180, 10.0, 2.0)],
@@ -112,35 +112,35 @@ SCENARIOS = [
         'sick_episodes': [(40, 55), (120, 135)],
     },
     {
-        'sn':     'device_sn_5',
+        'sn':     'device_id_5',
         'phases': [(0, 60, 10.0, 2.0), (60, 120, 15.0, 2.0), (120, 180, 22.0, 3.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_6',
+        'sn':     'device_id_6',
         'phases': [(0, 90, 10.0, 2.0), (90, 180, 25.0, 3.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (90, 180),
     },
     {
-        'sn':     'device_sn_7',
+        'sn':     'device_id_7',
         'phases': [(0, 50, 10.0, 2.0), (50, 80, 45.0, 6.0), (80, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (50, 80),
     },
     {
-        'sn':     'device_sn_8',
+        'sn':     'device_id_8',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.35,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_9',
+        'sn':     'device_id_9',
         'phases': [(0, 30, 10.0, 2.0), (30, 90, 3.0, 1.0), (90, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
@@ -148,49 +148,49 @@ SCENARIOS = [
     },
     # 设备/数据质量场景 10-16
     {
-        'sn':     'device_sn_10',
+        'sn':     'device_id_10',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(35, 38, 'unworn')],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_11',
+        'sn':     'device_id_11',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(40, 45, 'battery')],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_12',
+        'sn':     'device_id_12',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(30, 65, 'battery')],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_13',
+        'sn':     'device_id_13',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_14',
+        'sn':     'device_id_14',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(50, 58, 'loose')],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_15',
+        'sn':     'device_id_15',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(88, 92, 'battery')],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_16',
+        'sn':     'device_id_16',
         'phases': [(0, 70, 10.0, 2.0), (70, 90, 35.0, 5.0), (90, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
@@ -199,14 +199,14 @@ SCENARIOS = [
     },
     # 环境场景 17-20
     {
-        'sn':     'device_sn_17',
+        'sn':     'device_id_17',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.30,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_18',
+        'sn':     'device_id_18',
         'phases': [(0, 60, 10.0, 2.0), (60, 180, 13.0, 2.0)],
         'tc':     0.15,
         'gaps':   [],
@@ -214,14 +214,14 @@ SCENARIOS = [
         'temp_shift': (60, 5.0),
     },
     {
-        'sn':     'device_sn_19',
+        'sn':     'device_id_19',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(80, 90, 'unworn')],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_20',
+        'sn':     'device_id_20',
         'phases': [(0, 180, 14.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
@@ -229,7 +229,7 @@ SCENARIOS = [
     },
     # 个体类型场景 21-24
     {
-        'sn':     'device_sn_21',
+        'sn':     'device_id_21',
         'phases': [(0, 180, 15.0, 4.0)],
         'tc':     0.10,
         'gaps':   [],
@@ -237,21 +237,21 @@ SCENARIOS = [
         'warmup': 7,
     },
     {
-        'sn':     'device_sn_22',
+        'sn':     'device_id_22',
         'phases': [(0, 180, 5.0, 1.0)],
         'tc':     0.05,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_23',
+        'sn':     'device_id_23',
         'phases': [(0, 180, 20.0, 3.0)],
         'tc':     0.12,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_sn_24',
+        'sn':     'device_id_24',
         'phases': [(0, 180, 4.0, 1.0)],
         'tc':     0.08,
         'gaps':   [],
