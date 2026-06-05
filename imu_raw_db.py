@@ -158,42 +158,29 @@ def build_gap_map(gaps: list) -> dict:
 
 
 # ══════════════════════════════════════════════════════
-#  IMU 原始采样点生成
+#  IMU 原始采样点生成（向量化批量生成）
 # ══════════════════════════════════════════════════════
 
-def _clip(v, m):
-    return round(float(np.clip(v, -m, m)), 2)
+_IMU_CLIPS = np.array([ACC_MAX, ACC_MAX, ACC_MAX, GYRO_MAX, GYRO_MAX, GYRO_MAX])
+_IMU_MEANS = {
+    BEHAVIOR_SLEEP:   np.array([0.0, 0.0, 9.8, 0.0,  0.0,  0.0]),
+    BEHAVIOR_MOVE:    np.array([0.0, 0.0, 9.8, 0.0,  0.0,  0.0]),
+    BEHAVIOR_SCRATCH: np.array([0.0, 0.0, 9.8, 0.0,  0.0,  0.0]),
+}
+_IMU_STDS_BASE = {
+    BEHAVIOR_SLEEP:   np.array([0.3,  0.3,  0.4,  0.05, 0.05, 0.04]),
+    BEHAVIOR_MOVE:    np.array([4.0,  3.5,  5.0,  1.5,  1.2,  1.0]),
+    BEHAVIOR_SCRATCH: np.array([12.0, 8.0,  6.0,  5.0,  4.0,  3.5]),
+}
 
 
-def gen_imu_sample(behavior: int, sick_intensity: float = 1.0) -> tuple:
-    si = sick_intensity
-    if behavior == BEHAVIOR_SLEEP:
-        return (
-            _clip(np.random.normal(0,    0.3),  ACC_MAX),
-            _clip(np.random.normal(0,    0.3),  ACC_MAX),
-            _clip(np.random.normal(9.8,  0.4),  ACC_MAX),
-            _clip(np.random.normal(0,    0.05), GYRO_MAX),
-            _clip(np.random.normal(0,    0.05), GYRO_MAX),
-            _clip(np.random.normal(0,    0.04), GYRO_MAX),
-        )
-    elif behavior == BEHAVIOR_MOVE:
-        return (
-            _clip(np.random.normal(0,   4.0),  ACC_MAX),
-            _clip(np.random.normal(0,   3.5),  ACC_MAX),
-            _clip(np.random.normal(9.8, 5.0),  ACC_MAX),
-            _clip(np.random.normal(0,   1.5),  GYRO_MAX),
-            _clip(np.random.normal(0,   1.2),  GYRO_MAX),
-            _clip(np.random.normal(0,   1.0),  GYRO_MAX),
-        )
-    else:  # SCRATCH
-        return (
-            _clip(np.random.normal(0,  12.0 * si), ACC_MAX),
-            _clip(np.random.normal(0,   8.0 * si), ACC_MAX),
-            _clip(np.random.normal(9.8, 6.0 * si), ACC_MAX),
-            _clip(np.random.normal(0,   5.0 * si), GYRO_MAX),
-            _clip(np.random.normal(0,   4.0 * si), GYRO_MAX),
-            _clip(np.random.normal(0,   3.5 * si), GYRO_MAX),
-        )
+def gen_imu_batch(n: int, behavior: int, si: float = 1.0) -> np.ndarray:
+    """返回 shape (n, 6) 的 float32 数组，已 clip 并四舍五入到 2 位小数"""
+    means = _IMU_MEANS[behavior]
+    stds  = _IMU_STDS_BASE[behavior] * (si if behavior == BEHAVIOR_SCRATCH else 1.0)
+    data  = np.random.normal(means, stds, size=(n, 6))
+    data  = np.clip(data, -_IMU_CLIPS, _IMU_CLIPS)
+    return np.round(data, 2)
 
 
 def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
@@ -201,7 +188,6 @@ def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
     d       = START_DATE + timedelta(days=day_idx)
     day_ts  = to_ts(d)
     step_ms = int(1000 / IMU_SAMPLE_HZ)
-    rows    = []
 
     s_morn = n_scratch // 3
     s_aftn = n_scratch - s_morn
@@ -213,6 +199,8 @@ def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
         (20 * 3600, 24 * 3600, 0.75, 0),
     ]
 
+    # collect (ts_start, n_samples, behavior, si) blocks first
+    blocks = []
     for seg_s, seg_e, sleep_w, n_sc in segments:
         scratch_times = (
             sorted(np.random.randint(seg_s, seg_e, int(n_sc)).tolist())
@@ -238,14 +226,24 @@ def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
             if dur_sec <= 0:
                 break
 
-            ts_ms     = day_ts + cursor * 1000
-            n_samples = dur_sec * IMU_SAMPLE_HZ
-            for i in range(n_samples):
-                rows.append((ts_ms + i * step_ms,) + gen_imu_sample(btype, si))
-
+            blocks.append((day_ts + cursor * 1000, dur_sec * IMU_SAMPLE_HZ, btype, si))
             cursor += dur_sec
 
-    return rows
+    # vectorized generation: build full arrays, convert to list at once
+    ts_parts  = []
+    imu_parts = []
+    for ts_start, n_samples, btype, si in blocks:
+        imu = gen_imu_batch(n_samples, btype, si)           # (n_samples, 6)
+        ts  = np.arange(n_samples, dtype=np.int64) * step_ms + ts_start
+        ts_parts.append(ts)
+        imu_parts.append(imu)
+
+    all_ts  = np.concatenate(ts_parts)                      # (total,)
+    all_imu = np.concatenate(imu_parts, axis=0)             # (total, 6)
+
+    return list(zip(all_ts.tolist(), all_imu[:, 0].tolist(), all_imu[:, 1].tolist(),
+                    all_imu[:, 2].tolist(), all_imu[:, 3].tolist(),
+                    all_imu[:, 4].tolist(), all_imu[:, 5].tolist()))
 
 
 # ══════════════════════════════════════════════════════
