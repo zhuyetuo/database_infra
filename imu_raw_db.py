@@ -12,8 +12,10 @@ neck_temp_raw  d{n}_neck        脖颈温度           每300s
 import os
 import math
 import time
+import threading
 import requests
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta, datetime, timezone
 
 # ══════════════════════════════════════════════════════
@@ -142,10 +144,11 @@ def is_sick_day(day_idx: int, sc: dict) -> bool:
     return bool(sick and sick[0] <= day_idx < sick[1])
 
 
-def scratch_count_for_day(day_idx: int, phases: list, temp: float, tc: float) -> int:
+def scratch_count_for_day(day_idx: int, phases: list, temp: float, tc: float,
+                          rng: np.random.RandomState) -> int:
     for s, e, mean, std in phases:
         if s <= day_idx < e:
-            return max(0, int(np.random.normal(mean + tc * (temp - 20), std)))
+            return max(0, int(rng.normal(mean + tc * (temp - 20), std)))
     return 0
 
 
@@ -174,17 +177,18 @@ _IMU_STDS_BASE = {
 }
 
 
-def gen_imu_batch(n: int, behavior: int, si: float = 1.0) -> np.ndarray:
-    """返回 shape (n, 6) 的 float32 数组，已 clip 并四舍五入到 2 位小数"""
+def gen_imu_batch(n: int, behavior: int, si: float, rng: np.random.RandomState) -> np.ndarray:
+    """返回 shape (n, 6)，已 clip 并四舍五入到 2 位小数"""
     means = _IMU_MEANS[behavior]
     stds  = _IMU_STDS_BASE[behavior] * (si if behavior == BEHAVIOR_SCRATCH else 1.0)
-    data  = np.random.normal(means, stds, size=(n, 6))
+    data  = rng.normal(means, stds, size=(n, 6))
     data  = np.clip(data, -_IMU_CLIPS, _IMU_CLIPS)
     return np.round(data, 2)
 
 
-def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
-    """返回 list of (ts_ms, ax, ay, az, gx, gy, gz)"""
+def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float,
+                rng: np.random.RandomState) -> tuple:
+    """返回 (ts_arr: int64 (N,), imu_arr: float64 (N,6))，不转 Python list"""
     d       = START_DATE + timedelta(days=day_idx)
     day_ts  = to_ts(d)
     step_ms = int(1000 / IMU_SAMPLE_HZ)
@@ -199,11 +203,10 @@ def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
         (20 * 3600, 24 * 3600, 0.75, 0),
     ]
 
-    # collect (ts_start, n_samples, behavior, si) blocks first
     blocks = []
     for seg_s, seg_e, sleep_w, n_sc in segments:
         scratch_times = (
-            sorted(np.random.randint(seg_s, seg_e, int(n_sc)).tolist())
+            sorted(rng.randint(seg_s, seg_e, int(n_sc)).tolist())
             if n_sc > 0 else []
         )
         sc_idx = 0
@@ -211,15 +214,15 @@ def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
 
         while cursor < seg_e:
             if sc_idx < len(scratch_times) and cursor >= scratch_times[sc_idx]:
-                dur_sec = int(np.random.uniform(1, 8))
+                dur_sec = int(rng.uniform(1, 8))
                 btype   = BEHAVIOR_SCRATCH
                 si      = sick_intensity
                 sc_idx += 1
             else:
-                btype   = BEHAVIOR_SLEEP if np.random.random() < sleep_w else BEHAVIOR_MOVE
-                dur_sec = (int(np.random.uniform(600, 3600))
+                btype   = BEHAVIOR_SLEEP if rng.random() < sleep_w else BEHAVIOR_MOVE
+                dur_sec = (int(rng.uniform(600, 3600))
                            if btype == BEHAVIOR_SLEEP
-                           else int(np.random.uniform(60, 900)))
+                           else int(rng.uniform(60, 900)))
                 si      = 1.0
 
             dur_sec = min(dur_sec, seg_e - cursor)
@@ -229,28 +232,22 @@ def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float) -> list:
             blocks.append((day_ts + cursor * 1000, dur_sec * IMU_SAMPLE_HZ, btype, si))
             cursor += dur_sec
 
-    # vectorized generation: build full arrays, convert to list at once
     ts_parts  = []
     imu_parts = []
     for ts_start, n_samples, btype, si in blocks:
-        imu = gen_imu_batch(n_samples, btype, si)           # (n_samples, 6)
+        imu = gen_imu_batch(n_samples, btype, si, rng)
         ts  = np.arange(n_samples, dtype=np.int64) * step_ms + ts_start
         ts_parts.append(ts)
         imu_parts.append(imu)
 
-    all_ts  = np.concatenate(ts_parts)                      # (total,)
-    all_imu = np.concatenate(imu_parts, axis=0)             # (total, 6)
-
-    return list(zip(all_ts.tolist(), all_imu[:, 0].tolist(), all_imu[:, 1].tolist(),
-                    all_imu[:, 2].tolist(), all_imu[:, 3].tolist(),
-                    all_imu[:, 4].tolist(), all_imu[:, 5].tolist()))
+    return np.concatenate(ts_parts), np.concatenate(imu_parts, axis=0)
 
 
 # ══════════════════════════════════════════════════════
 #  环境温湿度 + 脖颈温度生成
 # ══════════════════════════════════════════════════════
 
-def gen_env_day(day_idx: int) -> list:
+def gen_env_day(day_idx: int, rng: np.random.RandomState) -> list:
     """返回 list of (ts_ms, env_temp, env_humi)，每 ENV_SAMPLE_INTERVAL 秒一条"""
     d      = START_DATE + timedelta(days=day_idx)
     day_ts = to_ts(d)
@@ -258,27 +255,27 @@ def gen_env_day(day_idx: int) -> list:
     t_base = 22 + 13 * math.sin((doy - 80) / 365 * 2 * math.pi)
     h_base = 65 + 15 * math.sin((doy - 80) / 365 * 2 * math.pi)
 
-    rows = []
-    for s in range(0, 86400, ENV_SAMPLE_INTERVAL):
-        env_temp = round(t_base + np.random.normal(0, 1.5), 1)
-        env_humi = round(h_base + np.random.normal(0, 3.0), 1)
-        rows.append((day_ts + s * 1000, env_temp, env_humi))
-    return rows
+    secs   = np.arange(0, 86400, ENV_SAMPLE_INTERVAL)
+    n      = len(secs)
+    temps  = np.round(t_base + rng.normal(0, 1.5, n), 1)
+    humis  = np.round(h_base + rng.normal(0, 3.0, n), 1)
+    ts_arr = (day_ts + secs * 1000).astype(np.int64)
+    return list(zip(ts_arr.tolist(), temps.tolist(), humis.tolist()))
 
 
-def gen_neck_day(day_idx: int, sick_intensity: float) -> list:
+def gen_neck_day(day_idx: int, sick_intensity: float, rng: np.random.RandomState) -> list:
     """返回 list of (ts_ms, neck_temp)，每 NECK_SAMPLE_INTERVAL 秒一条"""
     d      = START_DATE + timedelta(days=day_idx)
     day_ts = to_ts(d)
 
-    rows = []
-    for s in range(0, 86400, NECK_SAMPLE_INTERVAL):
-        if sick_intensity > 1.3:
-            neck_temp = round(38.5 + np.random.uniform(0.0, 0.8) * (sick_intensity - 0.3), 2)
-        else:
-            neck_temp = round(37.5 + np.random.uniform(-0.3, 0.3), 2)
-        rows.append((day_ts + s * 1000, neck_temp))
-    return rows
+    secs   = np.arange(0, 86400, NECK_SAMPLE_INTERVAL)
+    n      = len(secs)
+    ts_arr = (day_ts + secs * 1000).astype(np.int64)
+    if sick_intensity > 1.3:
+        neck = np.round(38.5 + rng.uniform(0.0, 0.8, n) * (sick_intensity - 0.3), 2)
+    else:
+        neck = np.round(37.5 + rng.uniform(-0.3, 0.3, n), 2)
+    return list(zip(ts_arr.tolist(), neck.tolist()))
 
 
 # ══════════════════════════════════════════════════════
@@ -324,15 +321,28 @@ def init_db():
 #  数据写入
 # ══════════════════════════════════════════════════════
 
-IMU_CHUNK  = 16000
-ENV_CHUNK  = 2000
-NECK_CHUNK = 1000
+IMU_CHUNK      = 16000
+ENV_CHUNK      = 2000
+NECK_CHUNK     = 1000
+PARALLEL_DEVS  = int(os.environ.get("PARALLEL_DEVS", "4"))  # 并行设备数
 
 
-def insert_imu(device_id: int, rows: list):
-    for i in range(0, len(rows), IMU_CHUNK):
-        b    = rows[i: i + IMU_CHUNK]
-        vals = " ".join(f"({r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]})" for r in b)
+def _imu_vals_str(ts_chunk: np.ndarray, imu_chunk: np.ndarray) -> str:
+    """numpy 数组直接转 SQL VALUES 字符串，避免中间 tuple list"""
+    ts_list  = ts_chunk.tolist()
+    ax = imu_chunk[:, 0].tolist(); ay = imu_chunk[:, 1].tolist()
+    az = imu_chunk[:, 2].tolist(); gx = imu_chunk[:, 3].tolist()
+    gy = imu_chunk[:, 4].tolist(); gz = imu_chunk[:, 5].tolist()
+    return " ".join(
+        f"({ts_list[j]},{ax[j]},{ay[j]},{az[j]},{gx[j]},{gy[j]},{gz[j]})"
+        for j in range(len(ts_list))
+    )
+
+
+def insert_imu(device_id: int, ts_arr: np.ndarray, imu_arr: np.ndarray):
+    n = len(ts_arr)
+    for i in range(0, n, IMU_CHUNK):
+        vals = _imu_vals_str(ts_arr[i:i + IMU_CHUNK], imu_arr[i:i + IMU_CHUNK])
         td_exec(f"INSERT INTO {TD_DB}.d{device_id}_imu VALUES {vals}")
 
 
@@ -354,7 +364,10 @@ def insert_neck(device_id: int, rows: list):
 #  场景数据生成
 # ══════════════════════════════════════════════════════
 
-def _bar(done: int, total: int, width: int = 30) -> str:
+_print_lock = threading.Lock()
+
+
+def _bar(done: int, total: int, width: int = 20) -> str:
     filled = int(width * done / total)
     return f"[{'█' * filled}{'░' * (width - filled)}] {done}/{total}"
 
@@ -362,7 +375,7 @@ def _bar(done: int, total: int, width: int = 30) -> str:
 def load_scenario(sc: dict, seed: int = 42, dev_idx: int = 0, dev_total: int = 1):
     device_id = sc['device_id']
     gap_map   = build_gap_map(sc['gaps'])
-    np.random.seed(seed)
+    rng       = np.random.RandomState(seed)   # 线程独立 RNG，不影响全局状态
 
     imu_total = env_total = neck_total = 0
     t0 = time.time()
@@ -370,38 +383,45 @@ def load_scenario(sc: dict, seed: int = 42, dev_idx: int = 0, dev_total: int = 1
 
     valid_days = [i for i in range(DAYS) if i not in gap_map]
 
-    print(f"\n  [{dev_idx+1:>2}/{dev_total}] device_id={device_id}")
+    with _print_lock:
+        print(f"  [开始] device_id={device_id}", flush=True)
+
     for idx, i in enumerate(valid_days):
         temp        = float(_temperature[i])
-        n_scratch   = scratch_count_for_day(i, sc['phases'], temp, sc['tc'])
+        n_scratch   = scratch_count_for_day(i, sc['phases'], temp, sc['tc'], rng)
         sick_intens = 1.8 if is_sick_day(i, sc) else 1.0
 
         t_gen = time.time()
-        imu_rows  = gen_imu_day(i, n_scratch, sick_intens)
-        env_rows  = gen_env_day(i)
-        neck_rows = gen_neck_day(i, sick_intens)
+        ts_arr, imu_arr = gen_imu_day(i, n_scratch, sick_intens, rng)
+        env_rows        = gen_env_day(i, rng)
+        neck_rows       = gen_neck_day(i, sick_intens, rng)
         gen_s += time.time() - t_gen
 
         t_ins = time.time()
-        insert_imu(device_id, imu_rows)
+        insert_imu(device_id, ts_arr, imu_arr)
         insert_env(device_id, env_rows)
         insert_neck(device_id, neck_rows)
         ins_s += time.time() - t_ins
 
-        imu_total  += len(imu_rows)
+        imu_total  += len(ts_arr)
         env_total  += len(env_rows)
         neck_total += len(neck_rows)
 
-        elapsed = time.time() - t0
-        done    = idx + 1
-        eta     = (elapsed / done) * (len(valid_days) - done)
-        bar     = _bar(done, len(valid_days))
-        print(f"\r    {bar}  gen={gen_s:.1f}s ins={ins_s:.1f}s  ETA {eta:.0f}s   ",
-              end="", flush=True)
+        # 每 10 天打一次进度，减少锁争用
+        if (idx + 1) % 10 == 0 or (idx + 1) == len(valid_days):
+            elapsed = time.time() - t0
+            done    = idx + 1
+            eta     = (elapsed / done) * (len(valid_days) - done)
+            with _print_lock:
+                print(f"  dev={device_id:>2} {_bar(done, len(valid_days))}"
+                      f"  gen={gen_s:.0f}s ins={ins_s:.0f}s ETA {eta:.0f}s", flush=True)
 
     elapsed = time.time() - t0
-    print(f"\r    完成  imu={imu_total:>12,}  env={env_total:>6,}  neck={neck_total:>4,}"
-          f"  耗时 {elapsed:.1f}s (生成 {gen_s:.1f}s / 插入 {ins_s:.1f}s)")
+    with _print_lock:
+        print(f"  [完成] device_id={device_id:<3} imu={imu_total:>12,}"
+              f"  env={env_total:>6,}  neck={neck_total:>4,}"
+              f"  耗时 {elapsed:.1f}s (gen={gen_s:.1f}s ins={ins_s:.1f}s)", flush=True)
+    return device_id, imu_total, env_total, neck_total, elapsed
 
 
 # ══════════════════════════════════════════════════════
@@ -442,10 +462,15 @@ def main():
     print("\n[1] 初始化数据库 & 表结构...")
     init_db()
 
-    print("\n[2] 生成并写入数据...")
+    print(f"\n[2] 生成并写入数据（{PARALLEL_DEVS} 设备并行）...")
     t_all = time.time()
-    for idx, sc in enumerate(SCENARIOS):
-        load_scenario(sc, seed=42 + idx, dev_idx=idx, dev_total=len(SCENARIOS))
+    with ThreadPoolExecutor(max_workers=PARALLEL_DEVS) as pool:
+        futures = {
+            pool.submit(load_scenario, sc, 42 + idx, idx, len(SCENARIOS)): sc['device_id']
+            for idx, sc in enumerate(SCENARIOS)
+        }
+        for f in as_completed(futures):
+            f.result()   # 传播异常
     print(f"\n  全部设备总耗时: {time.time() - t_all:.1f}s")
 
     print("\n[3] 查询验证...")
