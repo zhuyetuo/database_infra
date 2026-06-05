@@ -14,6 +14,7 @@ database_infra/
 ├── postgres-data/            # PostgreSQL 数据持久化目录（自动创建）
 ├── tdengine-data/            # TDengine 数据持久化目录（自动创建）
 ├── imu_raw_db.py             # TDengine 批量写入：IMU / 环境温湿度 / 颈温原始采样点（24 设备 × 180 天）
+├── imu_scale_db.py           # TDengine 万设备级批量写入（默认 10,000 设备 × 180 天，asyncio + aiohttp）
 ├── pg_seed.py                # PostgreSQL 初始化：pet_device schema、用户表、设备绑定历史
 ├── sim_devices.py            # 实时模拟器：双设备持续生成传感器数据写入 TDengine + PostgreSQL
 ├── run_sim.sh                # 模拟器启动脚本（source sim_config.env 后运行 sim_devices.py）
@@ -72,19 +73,51 @@ python pg_seed.py
 
 ### 3. 写入传感器原始数据（TDengine）
 
+#### 方案 A：24 设备精细场景（imu_raw_db.py）
+
 ```bash
 python imu_raw_db.py
 ```
 
-向 TDengine `pet_collar_raw` 数据库写入 24 个设备的原始采样数据：
+向 TDengine `pet_collar_raw` 写入 24 个设备的原始采样数据，每台设备有独立的健康/疾病/缺口场景：
 
-| 超级表 | 子表 | 内容 | 采样率 |
-|--------|------|------|--------|
-| `imu_raw` | `device_id_N_imu` | IMU 6轴 | 50 Hz |
-| `env_raw` | `device_id_N_env` | 环境温湿度 | 每 60s |
-| `neck_temp_raw` | `device_id_N_neck` | 颈部温度 | 每 60s |
+| 超级表 | 子表命名 | 内容 | 采样率 |
+|--------|---------|------|--------|
+| `imu_raw` | `dN_imu` | IMU 6轴 | 50 Hz |
+| `env_raw` | `dN_env` | 环境温湿度 | 每 60s |
+| `neck_temp_raw` | `dN_neck` | 颈部温度 | 每 60s |
 
-> 默认写入 3 天数据用于验证。验证通过后将 `imu_raw_db.py` 中 `DAYS = 3` 改为 `DAYS = 180` 再重新运行。
+并发设备数由 `sim_config.env` 中的 `PARALLEL_DEVS` 控制（默认 4）。
+
+#### 方案 B：万设备规模（imu_scale_db.py）
+
+```bash
+python imu_scale_db.py
+```
+
+面向大规模压测，默认 **10,000 设备 × 180 天**，写入同一个 `pet_collar_raw` 库：
+
+- **架构**：`asyncio` + `aiohttp` 并发 HTTP + `ThreadPoolExecutor` 并行 numpy 生成
+- **批量**：多表 INSERT，每条 SQL 约 900 KB，最大化单次 HTTP 数据量
+- **场景**：随机分配（70% 健康、25% 短期发病、5% 慢性）
+
+**关键参数**（在 `sim_config.env` 修改，或直接设置环境变量）：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `NUM_DEVICES`  | 10000 | 设备总数 |
+| `SCALE_DAYS`   | 180   | 天数 |
+| `GEN_WORKERS`  | 8     | 生成线程（建议 = CPU 核数） |
+| `INSERT_CONC`  | 64    | 并发 HTTP 请求数 |
+| `GROUP_SIZE`   | 8     | 每个生成任务的设备组大小 |
+| `IMU_CHUNK`    | 2200  | 每设备每块行数（≈ 114 KB） |
+| `SQL_PARTS`    | 8     | 每条 SQL 的块数（≈ 900 KB） |
+
+快速验证（少量设备）：
+
+```bash
+NUM_DEVICES=100 SCALE_DAYS=7 python imu_scale_db.py
+```
 
 ### 4. 启动实时模拟器
 
@@ -162,11 +195,20 @@ docker compose up -d --build  # 强制重建后启动
 ### TDengine — 删除全部子表数据
 
 ```bash
-# 逐表清空（保留表结构）
+# imu_raw_db.py 的 24 台设备（逐表清空）
 docker exec local-tdengine3 sh -c '
 for n in $(seq 1 24); do
   for suffix in imu env neck; do
     taos -s "DELETE FROM pet_collar_raw.d${n}_${suffix}"
+  done
+done
+'
+
+# imu_scale_db.py 的万台设备（逐表清空，替换 10000 为实际设备数）
+docker exec local-tdengine3 sh -c '
+for n in $(seq 1 10000); do
+  for suffix in imu env neck; do
+    taos -s "DELETE FROM pet_collar_raw.d${n}_${suffix}" 2>/dev/null
   done
 done
 '
