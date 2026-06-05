@@ -46,7 +46,7 @@ IMU_SAMPLE_HZ        = int(os.environ.get("IMU_SAMPLE_HZ",        "50"))
 ENV_SAMPLE_INTERVAL  = int(os.environ.get("ENV_SAMPLE_INTERVAL",  "60"))  # 秒
 NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "60"))  # 秒
 
-DAYS       = 3      # 验证通过后改为 180
+DAYS       = 180
 START_DATE = date(2024, 1, 1)
 
 ACC_MAX  = 78.46   # m/s²
