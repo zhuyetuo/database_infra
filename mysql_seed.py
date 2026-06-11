@@ -161,6 +161,9 @@ CREATE TABLE IF NOT EXISTS `{DB}`.`device_bind_history` (
 #  数据库操作
 # ══════════════════════════════════════════════════════
 
+MYSQL_ROOT_PASSWORD = os.environ.get("MYSQL_ROOT_PASSWORD", "123456")
+
+
 def mysql_conn():
     return pymysql.connect(
         host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
@@ -170,8 +173,20 @@ def mysql_conn():
     )
 
 
+def mysql_root_conn():
+    return pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user="root",
+        password=MYSQL_ROOT_PASSWORD,
+        cursorclass=pymysql.cursors.DictCursor,
+        charset="utf8mb4",
+    )
+
+
 def init_tables(cur):
     cur.execute(DDL_DATABASE)
+    # Grant privileges to appuser on the new database
+    cur.execute(f"GRANT ALL PRIVILEGES ON `{DB}`.* TO '{MYSQL_USER}'@'%'")
+    cur.execute("FLUSH PRIVILEGES")
     cur.execute(DDL_USER)
     cur.execute(DDL_BIND_HISTORY)
     print(f"[OK] database `{DB}` & 表结构已就绪")
@@ -225,11 +240,18 @@ def main():
     print(f"  设备数   : {len(BINDINGS)}")
     print("=" * 55)
 
+    # Use root to create database and grant privileges
+    root_conn = mysql_root_conn()
+    root_cur  = root_conn.cursor()
+    print("\n[1] 初始化表结构...")
+    init_tables(root_cur)
+    root_conn.commit()
+    root_cur.close()
+    root_conn.close()
+
+    # Use appuser for data operations
     conn = mysql_conn()
     cur  = conn.cursor()
-
-    print("\n[1] 初始化表结构...")
-    init_tables(cur)
 
     print("\n[2] 写入用户数据...")
     seed_users(cur)
