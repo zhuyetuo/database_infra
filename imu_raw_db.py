@@ -1,12 +1,12 @@
 """
 传感器原始数据批量加载（TDengine）
 ====================================
-数据库: pet_collar_raw
+数据库: hiccpet_device
 
-超级表          子表命名             内容
-imu_raw        d{n}_imu         IMU 6轴原始采样点  50Hz
-env_raw        d{n}_env         环境温度 + 湿度    每60s
-neck_temp_raw  d{n}_neck        脖颈温度           每300s
+超级表          子表命名                           内容
+imu_data       imu_{sn_lower}               IMU 6轴原始采样点  50Hz
+env_data       env_{sn_lower}               环境温度 + 湿度    每60s
+body_temp_data bodytemp_{sn_lower}          脖颈温度           每300s
 """
 
 import os
@@ -43,7 +43,7 @@ TD_HOST      = os.environ.get("TD_HOST", "127.0.0.1")
 TD_PORT      = int(os.environ.get("TD_PORT", "6041"))
 TD_USER      = os.environ.get("TD_USER", "root")
 TD_PASS      = os.environ.get("TD_PASS", "taosdata")
-TD_DB        = os.environ.get("TD_DB",   "pet_collar_raw")
+TD_DB        = os.environ.get("TD_DB",   "hiccpet_device")
 IMU_SAMPLE_HZ        = int(os.environ.get("IMU_SAMPLE_HZ",        "50"))
 ENV_SAMPLE_INTERVAL  = int(os.environ.get("ENV_SAMPLE_INTERVAL",  "60"))  # 秒
 NECK_SAMPLE_INTERVAL = int(os.environ.get("NECK_SAMPLE_INTERVAL", "60"))  # 秒
@@ -86,30 +86,30 @@ np.random.seed(42)
 #  场景定义（24 个）
 # ══════════════════════════════════════════════════════
 SCENARIOS = [
-    {'device_id': 1,  'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
-    {'device_id': 2,  'phases': [(0, 60, 10.0, 2.0), (60, 80, 30.0, 4.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 80)},
-    {'device_id': 3,  'phases': [(0, 60, 10.0, 2.0), (60, 180, 28.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 180)},
-    {'device_id': 4,  'phases': [(0, 40, 10.0, 2.0), (40, 55, 28.0, 4.0), (55, 120, 10.0, 2.0), (120, 135, 30.0, 4.0), (135, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'sick_episodes': [(40, 55), (120, 135)]},
-    {'device_id': 5,  'phases': [(0, 60, 10.0, 2.0), (60, 120, 15.0, 2.0), (120, 180, 22.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
-    {'device_id': 6,  'phases': [(0, 90, 10.0, 2.0), (90, 180, 25.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': (90, 180)},
-    {'device_id': 7,  'phases': [(0, 50, 10.0, 2.0), (50, 80, 45.0, 6.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (50, 80)},
-    {'device_id': 8,  'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.35, 'gaps': [], 'sick': None},
-    {'device_id': 9,  'phases': [(0, 30, 10.0, 2.0), (30, 90, 3.0, 1.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
-    {'device_id': 10, 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(35, 38, 'unworn')], 'sick': None},
-    {'device_id': 11, 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(40, 45, 'battery')], 'sick': None},
-    {'device_id': 12, 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(30, 65, 'battery')], 'sick': None},
-    {'device_id': 13, 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)], 'sick': None},
-    {'device_id': 14, 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(50, 58, 'loose')], 'sick': None},
-    {'device_id': 15, 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(88, 92, 'battery')], 'sick': None},
-    {'device_id': 16, 'phases': [(0, 70, 10.0, 2.0), (70, 90, 35.0, 5.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'drift_range': (70, 90)},
-    {'device_id': 17, 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.30, 'gaps': [], 'sick': None},
-    {'device_id': 18, 'phases': [(0, 60, 10.0, 2.0), (60, 180, 13.0, 2.0)], 'tc': 0.15, 'gaps': [], 'sick': None, 'temp_shift': (60, 5.0)},
-    {'device_id': 19, 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(80, 90, 'unworn')], 'sick': None},
-    {'device_id': 20, 'phases': [(0, 180, 14.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
-    {'device_id': 21, 'phases': [(0, 180, 15.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'warmup': 7},
-    {'device_id': 22, 'phases': [(0, 180, 5.0, 1.0)],  'tc': 0.05, 'gaps': [], 'sick': None},
-    {'device_id': 23, 'phases': [(0, 180, 20.0, 3.0)], 'tc': 0.12, 'gaps': [], 'sick': None},
-    {'device_id': 24, 'phases': [(0, 180, 4.0, 1.0)],  'tc': 0.08, 'gaps': [], 'sick': None},
+    {'device_id': 1001, 'device_sn': 'SIM-D001', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'device_id': 1002, 'device_sn': 'SIM-D002', 'phases': [(0, 60, 10.0, 2.0), (60, 80, 30.0, 4.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 80)},
+    {'device_id': 1003, 'device_sn': 'SIM-D003', 'phases': [(0, 60, 10.0, 2.0), (60, 180, 28.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 180)},
+    {'device_id': 1004, 'device_sn': 'SIM-D004', 'phases': [(0, 40, 10.0, 2.0), (40, 55, 28.0, 4.0), (55, 120, 10.0, 2.0), (120, 135, 30.0, 4.0), (135, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'sick_episodes': [(40, 55), (120, 135)]},
+    {'device_id': 1005, 'device_sn': 'SIM-D005', 'phases': [(0, 60, 10.0, 2.0), (60, 120, 15.0, 2.0), (120, 180, 22.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'device_id': 1006, 'device_sn': 'SIM-D006', 'phases': [(0, 90, 10.0, 2.0), (90, 180, 25.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': (90, 180)},
+    {'device_id': 1007, 'device_sn': 'SIM-D007', 'phases': [(0, 50, 10.0, 2.0), (50, 80, 45.0, 6.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (50, 80)},
+    {'device_id': 1008, 'device_sn': 'SIM-D008', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.35, 'gaps': [], 'sick': None},
+    {'device_id': 1009, 'device_sn': 'SIM-D009', 'phases': [(0, 30, 10.0, 2.0), (30, 90, 3.0, 1.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'device_id': 1010, 'device_sn': 'SIM-D010', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(35, 38, 'unworn')], 'sick': None},
+    {'device_id': 1011, 'device_sn': 'SIM-D011', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(40, 45, 'battery')], 'sick': None},
+    {'device_id': 1012, 'device_sn': 'SIM-D012', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(30, 65, 'battery')], 'sick': None},
+    {'device_id': 1013, 'device_sn': 'SIM-D013', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)], 'sick': None},
+    {'device_id': 1014, 'device_sn': 'SIM-D014', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(50, 58, 'loose')], 'sick': None},
+    {'device_id': 1015, 'device_sn': 'SIM-D015', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(88, 92, 'battery')], 'sick': None},
+    {'device_id': 1016, 'device_sn': 'SIM-D016', 'phases': [(0, 70, 10.0, 2.0), (70, 90, 35.0, 5.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'drift_range': (70, 90)},
+    {'device_id': 1017, 'device_sn': 'SIM-D017', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.30, 'gaps': [], 'sick': None},
+    {'device_id': 1018, 'device_sn': 'SIM-D018', 'phases': [(0, 60, 10.0, 2.0), (60, 180, 13.0, 2.0)], 'tc': 0.15, 'gaps': [], 'sick': None, 'temp_shift': (60, 5.0)},
+    {'device_id': 1019, 'device_sn': 'SIM-D019', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(80, 90, 'unworn')], 'sick': None},
+    {'device_id': 1020, 'device_sn': 'SIM-D020', 'phases': [(0, 180, 14.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'device_id': 1021, 'device_sn': 'SIM-D021', 'phases': [(0, 180, 15.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'warmup': 7},
+    {'device_id': 1022, 'device_sn': 'SIM-D022', 'phases': [(0, 180, 5.0, 1.0)],  'tc': 0.05, 'gaps': [], 'sick': None},
+    {'device_id': 1023, 'device_sn': 'SIM-D023', 'phases': [(0, 180, 20.0, 3.0)], 'tc': 0.12, 'gaps': [], 'sick': None},
+    {'device_id': 1024, 'device_sn': 'SIM-D024', 'phases': [(0, 180, 4.0, 1.0)],  'tc': 0.08, 'gaps': [], 'sick': None},
 ]
 
 
@@ -131,6 +131,11 @@ def td_exec(sql: str) -> dict:
 # ══════════════════════════════════════════════════════
 #  工具函数
 # ══════════════════════════════════════════════════════
+
+def sn_to_tbl(sn: str) -> str:
+    """Convert device SN to TDengine child table suffix, e.g. 'SIM-D001' -> 'sim_d001'"""
+    return sn.lower().replace('-', '_').replace(':', '_')
+
 
 def to_ts(d: date) -> int:
     return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp() * 1000)
@@ -248,7 +253,7 @@ def gen_imu_day(day_idx: int, n_scratch: int, sick_intensity: float,
 # ══════════════════════════════════════════════════════
 
 def gen_env_day(day_idx: int, rng: np.random.RandomState) -> list:
-    """返回 list of (ts_ms, env_temp, env_humi)，每 ENV_SAMPLE_INTERVAL 秒一条"""
+    """返回 list of (ts_ms, temperature, humidity)，每 ENV_SAMPLE_INTERVAL 秒一条"""
     d      = START_DATE + timedelta(days=day_idx)
     day_ts = to_ts(d)
     doy    = d.timetuple().tm_yday
@@ -264,7 +269,7 @@ def gen_env_day(day_idx: int, rng: np.random.RandomState) -> list:
 
 
 def gen_neck_day(day_idx: int, sick_intensity: float, rng: np.random.RandomState) -> list:
-    """返回 list of (ts_ms, neck_temp)，每 NECK_SAMPLE_INTERVAL 秒一条"""
+    """返回 list of (ts_ms, temp)，每 NECK_SAMPLE_INTERVAL 秒一条"""
     d      = START_DATE + timedelta(days=day_idx)
     day_ts = to_ts(d)
 
@@ -283,38 +288,16 @@ def gen_neck_day(day_idx: int, sick_intensity: float, rng: np.random.RandomState
 # ══════════════════════════════════════════════════════
 
 def init_db():
-    td_exec(f"CREATE DATABASE IF NOT EXISTS {TD_DB} KEEP 3650 DURATION 10 COMP 2")
-
-    td_exec(f"""
-        CREATE STABLE IF NOT EXISTS {TD_DB}.imu_raw (
-            ts  TIMESTAMP,
-            ax  FLOAT, ay  FLOAT, az  FLOAT,
-            gx  FLOAT, gy  FLOAT, gz  FLOAT
-        ) TAGS (device_id BIGINT)
-    """)
-
-    td_exec(f"""
-        CREATE STABLE IF NOT EXISTS {TD_DB}.env_raw (
-            ts        TIMESTAMP,
-            env_temp  FLOAT,
-            env_humi  FLOAT
-        ) TAGS (device_id BIGINT)
-    """)
-
-    td_exec(f"""
-        CREATE STABLE IF NOT EXISTS {TD_DB}.neck_temp_raw (
-            ts        TIMESTAMP,
-            neck_temp FLOAT
-        ) TAGS (device_id BIGINT)
-    """)
-
+    # Do NOT create supertables - they already exist on production.
+    # Only create child tables with IF NOT EXISTS.
     for sc in SCENARIOS:
-        device_id = sc['device_id']
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.d{device_id}_imu  USING {TD_DB}.imu_raw       TAGS ({device_id})")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.d{device_id}_env  USING {TD_DB}.env_raw        TAGS ({device_id})")
-        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.d{device_id}_neck USING {TD_DB}.neck_temp_raw  TAGS ({device_id})")
+        sn = sc['device_sn']
+        suffix = sn_to_tbl(sn)
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.imu_{suffix} USING {TD_DB}.imu_data TAGS ('{sn}')")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.env_{suffix} USING {TD_DB}.env_data TAGS ('{sn}')")
+        td_exec(f"CREATE TABLE IF NOT EXISTS {TD_DB}.bodytemp_{suffix} USING {TD_DB}.body_temp_data TAGS ('{sn}')")
 
-    print(f"[OK] 数据库 & 表结构已就绪（{len(SCENARIOS)} 个设备）")
+    print(f"[OK] 子表已就绪（{len(SCENARIOS)} 个设备）")
 
 
 # ══════════════════════════════════════════════════════
@@ -328,36 +311,39 @@ PARALLEL_DEVS  = int(os.environ.get("PARALLEL_DEVS", "4"))  # 并行设备数
 
 
 def _imu_vals_str(ts_chunk: np.ndarray, imu_chunk: np.ndarray) -> str:
-    """numpy 数组直接转 SQL VALUES 字符串，避免中间 tuple list"""
+    """numpy 数组直接转 SQL VALUES 字符串，字段顺序: accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z"""
     ts_list  = ts_chunk.tolist()
-    ax = imu_chunk[:, 0].tolist(); ay = imu_chunk[:, 1].tolist()
-    az = imu_chunk[:, 2].tolist(); gx = imu_chunk[:, 3].tolist()
-    gy = imu_chunk[:, 4].tolist(); gz = imu_chunk[:, 5].tolist()
+    accel_x = imu_chunk[:, 0].tolist(); accel_y = imu_chunk[:, 1].tolist()
+    accel_z = imu_chunk[:, 2].tolist(); gyro_x  = imu_chunk[:, 3].tolist()
+    gyro_y  = imu_chunk[:, 4].tolist(); gyro_z  = imu_chunk[:, 5].tolist()
     return " ".join(
-        f"({ts_list[j]},{ax[j]},{ay[j]},{az[j]},{gx[j]},{gy[j]},{gz[j]})"
+        f"({ts_list[j]},{accel_x[j]},{accel_y[j]},{accel_z[j]},{gyro_x[j]},{gyro_y[j]},{gyro_z[j]})"
         for j in range(len(ts_list))
     )
 
 
-def insert_imu(device_id: int, ts_arr: np.ndarray, imu_arr: np.ndarray):
+def insert_imu(device_sn: str, ts_arr: np.ndarray, imu_arr: np.ndarray):
+    suffix = sn_to_tbl(device_sn)
     n = len(ts_arr)
     for i in range(0, n, IMU_CHUNK):
         vals = _imu_vals_str(ts_arr[i:i + IMU_CHUNK], imu_arr[i:i + IMU_CHUNK])
-        td_exec(f"INSERT INTO {TD_DB}.d{device_id}_imu VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.imu_{suffix} VALUES {vals}")
 
 
-def insert_env(device_id: int, rows: list):
+def insert_env(device_sn: str, rows: list):
+    suffix = sn_to_tbl(device_sn)
     for i in range(0, len(rows), ENV_CHUNK):
         b    = rows[i: i + ENV_CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]})" for r in b)
-        td_exec(f"INSERT INTO {TD_DB}.d{device_id}_env VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.env_{suffix} VALUES {vals}")
 
 
-def insert_neck(device_id: int, rows: list):
+def insert_neck(device_sn: str, rows: list):
+    suffix = sn_to_tbl(device_sn)
     for i in range(0, len(rows), NECK_CHUNK):
         b    = rows[i: i + NECK_CHUNK]
         vals = " ".join(f"({r[0]},{r[1]})" for r in b)
-        td_exec(f"INSERT INTO {TD_DB}.d{device_id}_neck VALUES {vals}")
+        td_exec(f"INSERT INTO {TD_DB}.bodytemp_{suffix} VALUES {vals}")
 
 
 # ══════════════════════════════════════════════════════
@@ -373,7 +359,7 @@ def _bar(done: int, total: int, width: int = 20) -> str:
 
 
 def load_scenario(sc: dict, seed: int = 42, dev_idx: int = 0, dev_total: int = 1):
-    device_id = sc['device_id']
+    device_sn = sc['device_sn']
     gap_map   = build_gap_map(sc['gaps'])
     rng       = np.random.RandomState(seed)   # 线程独立 RNG，不影响全局状态
 
@@ -384,7 +370,7 @@ def load_scenario(sc: dict, seed: int = 42, dev_idx: int = 0, dev_total: int = 1
     valid_days = [i for i in range(DAYS) if i not in gap_map]
 
     with _print_lock:
-        print(f"  [开始] device_id={device_id}", flush=True)
+        print(f"  [开始] device_sn={device_sn}", flush=True)
 
     for idx, i in enumerate(valid_days):
         temp        = float(_temperature[i])
@@ -398,9 +384,9 @@ def load_scenario(sc: dict, seed: int = 42, dev_idx: int = 0, dev_total: int = 1
         gen_s += time.time() - t_gen
 
         t_ins = time.time()
-        insert_imu(device_id, ts_arr, imu_arr)
-        insert_env(device_id, env_rows)
-        insert_neck(device_id, neck_rows)
+        insert_imu(device_sn, ts_arr, imu_arr)
+        insert_env(device_sn, env_rows)
+        insert_neck(device_sn, neck_rows)
         ins_s += time.time() - t_ins
 
         imu_total  += len(ts_arr)
@@ -413,15 +399,15 @@ def load_scenario(sc: dict, seed: int = 42, dev_idx: int = 0, dev_total: int = 1
             done    = idx + 1
             eta     = (elapsed / done) * (len(valid_days) - done)
             with _print_lock:
-                print(f"  dev={device_id:>2} {_bar(done, len(valid_days))}"
+                print(f"  dev={device_sn} {_bar(done, len(valid_days))}"
                       f"  gen={gen_s:.0f}s ins={ins_s:.0f}s ETA {eta:.0f}s", flush=True)
 
     elapsed = time.time() - t0
     with _print_lock:
-        print(f"  [完成] device_id={device_id:<3} imu={imu_total:>12,}"
+        print(f"  [完成] device_sn={device_sn:<12} imu={imu_total:>12,}"
               f"  env={env_total:>6,}  neck={neck_total:>4,}"
               f"  耗时 {elapsed:.1f}s (gen={gen_s:.1f}s ins={ins_s:.1f}s)", flush=True)
-    return device_id, imu_total, env_total, neck_total, elapsed
+    return device_sn, imu_total, env_total, neck_total, elapsed
 
 
 # ══════════════════════════════════════════════════════
@@ -430,16 +416,17 @@ def load_scenario(sc: dict, seed: int = 42, dev_idx: int = 0, dev_total: int = 1
 
 def query_summary():
     print("\n======= 数据概况 =======")
-    print(f"  {'设备':<20}  {'IMU条数':>12}  {'ENV条数':>8}  {'NECK条数':>8}")
+    print(f"  {'设备SN':<20}  {'IMU条数':>12}  {'ENV条数':>8}  {'NECK条数':>8}")
     for sc in SCENARIOS:
-        device_id = sc['device_id']
+        device_sn = sc['device_sn']
+        suffix = sn_to_tbl(device_sn)
         try:
-            imu  = td_exec(f"SELECT COUNT(*) FROM {TD_DB}.d{device_id}_imu")['data'][0][0]
-            env  = td_exec(f"SELECT COUNT(*) FROM {TD_DB}.d{device_id}_env")['data'][0][0]
-            neck = td_exec(f"SELECT COUNT(*) FROM {TD_DB}.d{device_id}_neck")['data'][0][0]
-            print(f"  device_id={device_id:<14}  {int(imu):>12,}  {int(env):>8,}  {int(neck):>8,}")
+            imu  = td_exec(f"SELECT COUNT(*) FROM {TD_DB}.imu_{suffix}")['data'][0][0]
+            env  = td_exec(f"SELECT COUNT(*) FROM {TD_DB}.env_{suffix}")['data'][0][0]
+            neck = td_exec(f"SELECT COUNT(*) FROM {TD_DB}.bodytemp_{suffix}")['data'][0][0]
+            print(f"  device_sn={device_sn:<14}  {int(imu):>12,}  {int(env):>8,}  {int(neck):>8,}")
         except Exception as e:
-            print(f"  device_id={device_id}: 查询失败 {e}")
+            print(f"  device_sn={device_sn}: 查询失败 {e}")
 
 
 # ══════════════════════════════════════════════════════
@@ -459,14 +446,14 @@ def main():
     print(f"  NECK      : 每 {NECK_SAMPLE_INTERVAL}s  → 预估 {neck_est:,} 条/设备")
     print("=" * 60)
 
-    print("\n[1] 初始化数据库 & 表结构...")
+    print("\n[1] 初始化子表结构...")
     init_db()
 
     print(f"\n[2] 生成并写入数据（{PARALLEL_DEVS} 设备并行）...")
     t_all = time.time()
     with ThreadPoolExecutor(max_workers=PARALLEL_DEVS) as pool:
         futures = {
-            pool.submit(load_scenario, sc, 42 + idx, idx, len(SCENARIOS)): sc['device_id']
+            pool.submit(load_scenario, sc, 42 + idx, idx, len(SCENARIOS)): sc['device_sn']
             for idx, sc in enumerate(SCENARIOS)
         }
         for f in as_completed(futures):

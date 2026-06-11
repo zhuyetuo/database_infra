@@ -1,13 +1,13 @@
 """
-皮肤健康评估数据库（PostgreSQL）
+皮肤健康评估数据库（MySQL）
 =====================
-数据库: pet_collar，模式: pet_dog_skin_assessment
-每个设备独立一张每日评估表: {device_id}
+数据库: pet_dog_skin_assessment
+每个设备独立一张每日评估表: d_{device_id}
 
 24 个场景设备（与 imu_raw_db.py 一一对应）
 
 评估算法:
-  - 热身期（默认3天，device_id_21 为7天）：只收集，不评估
+  - 热身期（默认3天，SIM-D021 为7天）：只收集，不评估
   - 个体动态基线：异常天权重 0.01，正常天权重 0.05
   - 标准差保底 2.0
   - 温度修正：20 天数据后启用，系数上限 0.4
@@ -15,6 +15,7 @@
   - 缺口处理：基线冻结 → 恢复后缓冲天（data_quality=5）→ 缺口≥30天重置门槛
 """
 
+import os
 import pymysql
 import pymysql.cursors
 import numpy as np
@@ -22,12 +23,30 @@ import math
 from datetime import date, timedelta, datetime, timezone
 
 # ══════════════════════════════════════════════════════
+#  加载 sim_config.env
+# ══════════════════════════════════════════════════════
+def _load_config(path: str = "sim_config.env"):
+    here = os.path.dirname(os.path.abspath(__file__))
+    fpath = os.path.join(here, path)
+    if not os.path.exists(fpath):
+        return
+    with open(fpath) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+_load_config()
+
+# ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
-MYSQL_HOST     = "127.0.0.1"
-MYSQL_PORT     = 3306
-MYSQL_USER     = "appuser"
-MYSQL_PASSWORD = "123456"
+MYSQL_HOST     = os.environ.get("MYSQL_HOST",     "127.0.0.1")
+MYSQL_PORT     = int(os.environ.get("MYSQL_PORT", "3306"))
+MYSQL_USER     = os.environ.get("MYSQL_USER",     "root")
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "Hicc-mysql-2026")
 SKIN_SCHEMA    = "pet_dog_skin_assessment"
 
 DAYS       = 180
@@ -83,28 +102,32 @@ np.random.seed(42)
 SCENARIOS = [
     # 健康场景 1-9
     {
-        'sn':     'device_id_1',
+        'device_id': 1001,
+        'sn':     'SIM-D001',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_id_2',
+        'device_id': 1002,
+        'sn':     'SIM-D002',
         'phases': [(0, 60, 10.0, 2.0), (60, 80, 30.0, 4.0), (80, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (60, 80),
     },
     {
-        'sn':     'device_id_3',
+        'device_id': 1003,
+        'sn':     'SIM-D003',
         'phases': [(0, 60, 10.0, 2.0), (60, 180, 28.0, 4.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (60, 180),
     },
     {
-        'sn':          'device_id_4',
+        'device_id': 1004,
+        'sn':          'SIM-D004',
         'phases':      [(0, 40, 10.0, 2.0), (40, 55, 28.0, 4.0),
                         (55, 120, 10.0, 2.0), (120, 135, 30.0, 4.0),
                         (135, 180, 10.0, 2.0)],
@@ -114,35 +137,40 @@ SCENARIOS = [
         'sick_episodes': [(40, 55), (120, 135)],
     },
     {
-        'sn':     'device_id_5',
+        'device_id': 1005,
+        'sn':     'SIM-D005',
         'phases': [(0, 60, 10.0, 2.0), (60, 120, 15.0, 2.0), (120, 180, 22.0, 3.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_id_6',
+        'device_id': 1006,
+        'sn':     'SIM-D006',
         'phases': [(0, 90, 10.0, 2.0), (90, 180, 25.0, 3.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (90, 180),
     },
     {
-        'sn':     'device_id_7',
+        'device_id': 1007,
+        'sn':     'SIM-D007',
         'phases': [(0, 50, 10.0, 2.0), (50, 80, 45.0, 6.0), (80, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
         'sick':   (50, 80),
     },
     {
-        'sn':     'device_id_8',
+        'device_id': 1008,
+        'sn':     'SIM-D008',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.35,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_id_9',
+        'device_id': 1009,
+        'sn':     'SIM-D009',
         'phases': [(0, 30, 10.0, 2.0), (30, 90, 3.0, 1.0), (90, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
@@ -150,49 +178,56 @@ SCENARIOS = [
     },
     # 设备/数据质量场景 10-16
     {
-        'sn':     'device_id_10',
+        'device_id': 1010,
+        'sn':     'SIM-D010',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(35, 38, 'unworn')],
         'sick':   None,
     },
     {
-        'sn':     'device_id_11',
+        'device_id': 1011,
+        'sn':     'SIM-D011',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(40, 45, 'battery')],
         'sick':   None,
     },
     {
-        'sn':     'device_id_12',
+        'device_id': 1012,
+        'sn':     'SIM-D012',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(30, 65, 'battery')],
         'sick':   None,
     },
     {
-        'sn':     'device_id_13',
+        'device_id': 1013,
+        'sn':     'SIM-D013',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)],
         'sick':   None,
     },
     {
-        'sn':     'device_id_14',
+        'device_id': 1014,
+        'sn':     'SIM-D014',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(50, 58, 'loose')],
         'sick':   None,
     },
     {
-        'sn':     'device_id_15',
+        'device_id': 1015,
+        'sn':     'SIM-D015',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(88, 92, 'battery')],
         'sick':   None,
     },
     {
-        'sn':     'device_id_16',
+        'device_id': 1016,
+        'sn':     'SIM-D016',
         'phases': [(0, 70, 10.0, 2.0), (70, 90, 35.0, 5.0), (90, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
@@ -201,14 +236,16 @@ SCENARIOS = [
     },
     # 环境场景 17-20
     {
-        'sn':     'device_id_17',
+        'device_id': 1017,
+        'sn':     'SIM-D017',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.30,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_id_18',
+        'device_id': 1018,
+        'sn':     'SIM-D018',
         'phases': [(0, 60, 10.0, 2.0), (60, 180, 13.0, 2.0)],
         'tc':     0.15,
         'gaps':   [],
@@ -216,14 +253,16 @@ SCENARIOS = [
         'temp_shift': (60, 5.0),
     },
     {
-        'sn':     'device_id_19',
+        'device_id': 1019,
+        'sn':     'SIM-D019',
         'phases': [(0, 180, 10.0, 2.0)],
         'tc':     0.10,
         'gaps':   [(80, 90, 'unworn')],
         'sick':   None,
     },
     {
-        'sn':     'device_id_20',
+        'device_id': 1020,
+        'sn':     'SIM-D020',
         'phases': [(0, 180, 14.0, 2.0)],
         'tc':     0.10,
         'gaps':   [],
@@ -231,7 +270,8 @@ SCENARIOS = [
     },
     # 个体类型场景 21-24
     {
-        'sn':     'device_id_21',
+        'device_id': 1021,
+        'sn':     'SIM-D021',
         'phases': [(0, 180, 15.0, 4.0)],
         'tc':     0.10,
         'gaps':   [],
@@ -239,21 +279,24 @@ SCENARIOS = [
         'warmup': 7,
     },
     {
-        'sn':     'device_id_22',
+        'device_id': 1022,
+        'sn':     'SIM-D022',
         'phases': [(0, 180, 5.0, 1.0)],
         'tc':     0.05,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_id_23',
+        'device_id': 1023,
+        'sn':     'SIM-D023',
         'phases': [(0, 180, 20.0, 3.0)],
         'tc':     0.12,
         'gaps':   [],
         'sick':   None,
     },
     {
-        'sn':     'device_id_24',
+        'device_id': 1024,
+        'sn':     'SIM-D024',
         'phases': [(0, 180, 4.0, 1.0)],
         'tc':     0.08,
         'gaps':   [],
@@ -324,7 +367,7 @@ def build_gap_map(gaps: list) -> dict:
     return gm
 
 
-def to_date(d: date) -> str:
+def to_date_str(d: date) -> str:
     return d.strftime('%Y-%m-%d')
 
 
@@ -332,8 +375,12 @@ def to_ts(d: date) -> int:
     return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp() * 1000)
 
 
-def tbl(sn: str) -> str:
-    return f"`{SKIN_SCHEMA}`.`{sn.lower()}`"
+def now_ms() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def tbl(device_id: int) -> str:
+    return f"`{SKIN_SCHEMA}`.`d_{device_id}`"
 
 
 # ══════════════════════════════════════════════════════
@@ -360,10 +407,14 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
     recent_z_buf = []
 
     rows = []
+    now  = now_ms()
+
+    scratch_avg_dur_default = 30  # seconds
 
     for i in range(DAYS):
         d    = START_DATE + timedelta(days=i)
-        stat_date = to_date(d)
+        stat_date_ts = to_ts(d)
+        local_date   = to_date_str(d)
         temp = round(float(_temperature[i]), 1)
         sick = is_sick_day(i, sc)
         wear = int(np.random.uniform(1350, 1440))
@@ -375,17 +426,32 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
             gap_counter += 1
             in_gap       = True
             consec       = 0
+            worn_loose   = 0.0 if gap_reason != 'loose' else float(wear)
 
             rows.append((
-                stat_date,
-                0,
+                stat_date_ts,
+                local_date, 'UTC',
+                0,           # scratch_count
+                0,           # scratch_duration
+                scratch_avg_dur_default,  # scratch_avg_dur
+                scratch_avg_dur_default * 2,  # scratch_max_dur
+                0,           # night_scratch_count
+                0.0,         # wpeb_score
+                None,        # avg_humidity
                 safe(mean), safe(std),
-                None, None,
-                0,
+                temp_coef,   # temp_coef
+                0.0,         # temp_effect
+                None, None,  # zscore, avg_zscore
+                consec,
                 get_phase(valid_days),
-                None, None,
-                0, 0, None,
-                dq, 0,
+                None, None, 1.5,  # threshold_z, threshold_consec, threshold_avgz
+                valid_days,
+                0, 0, None,  # is_abnormal, alert_level, alert_reason
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # s1-s6, total_score
+                0,           # health_level
+                dq,
+                wear, worn_loose,
+                now, now,
             ))
             continue
 
@@ -407,15 +473,29 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
             buf_c.append(count)
             buf_t.append(temp)
             rows.append((
-                stat_date,
+                stat_date_ts,
+                local_date, 'UTC',
                 count,
+                count * scratch_avg_dur_default,
+                scratch_avg_dur_default,
+                scratch_avg_dur_default * 2,
+                int(count * 0.3),
+                0.0,
+                None,
                 None, None,
+                temp_coef,
+                0.0,
                 None, None,
                 0,
                 0,
-                None, None,
+                None, None, 1.5,
+                0,   # valid_days=0 during warmup
                 0, 0, None,
-                DATA_QUALITY_NORMAL, wear,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0,
+                DATA_QUALITY_NORMAL,
+                wear, 0.0,
+                now, now,
             ))
             continue
 
@@ -432,16 +512,32 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
             mean = mean * (1 - NORMAL_W) + count * NORMAL_W
             buf_c.append(count)
             buf_t.append(temp)
+            scratch_duration = count * scratch_avg_dur_default
+            night_sc = int(count * 0.3)
             rows.append((
-                stat_date,
+                stat_date_ts,
+                local_date, 'UTC',
                 count,
+                scratch_duration,
+                scratch_avg_dur_default,
+                scratch_avg_dur_default * 2,
+                night_sc,
+                0.0,
+                None,
                 round(mean, 2), round(std, 2),
+                temp_coef,
+                0.0,
                 None, None,
                 0,
                 get_phase(valid_days),
-                safe(tz), safe(tc),
+                safe(tz), safe(tc), 1.5,
+                valid_days,
                 0, 0, None,
-                DATA_QUALITY_BUFFER, wear,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0,
+                DATA_QUALITY_BUFFER,
+                wear, 0.0,
+                now, now,
             ))
             continue
 
@@ -474,16 +570,49 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
         reason = (f'连续{consec}天z>{tz:.1f}，均值z={avg_z:.2f}，抓挠{count}次'
                   if alert else None)
 
+        alert_level  = 1 if is_abn else 0
+        if alert:
+            alert_level = 2
+        health_level = 0 if not is_abn else (2 if alert else 1)
+
+        scratch_duration = count * scratch_avg_dur_default
+        night_sc = int(count * 0.3)
+        wpeb_score = float(zscore) if zscore is not None else 0.0
+
+        # s1-s6 simple distribution (equal split)
+        s_unit = round(count / 6.0, 1)
+        s_scores = [s_unit] * 6
+        total_score = round(sum(s_scores), 1)
+
+        gap_type = gap_map.get(i, None)
+        worn_loose = float(wear) if gap_type == 'loose' else 0.0
+
         rows.append((
-            stat_date,
+            stat_date_ts,
+            local_date, 'UTC',
             count,
+            scratch_duration,
+            scratch_avg_dur_default,
+            scratch_avg_dur_default * 2,
+            night_sc,
+            wpeb_score,
+            None,           # avg_humidity
             round(mean, 2), round(std, 2),
+            coef,
+            0.0,            # temp_effect
             zscore, avg_z,
             consec,
             get_phase(valid_days),
-            safe(tz), safe(tc),
-            int(is_abn), int(alert), reason,
-            DATA_QUALITY_NORMAL, wear,
+            safe(tz), safe(tc), 1.5,
+            valid_days,
+            int(is_abn), alert_level, reason,
+            s_scores[0], s_scores[1], s_scores[2],
+            s_scores[3], s_scores[4], s_scores[5],
+            total_score,
+            health_level,
+            DATA_QUALITY_NORMAL,
+            wear, worn_loose,
+            now, now,
         ))
 
     return rows
@@ -493,21 +622,20 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
 #  数据库操作
 # ══════════════════════════════════════════════════════
 
-def get_conn():
-    return pymysql.connect(
+def get_conn(database=None):
+    kwargs = dict(
         host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
-        password=MYSQL_PASSWORD, database=SKIN_SCHEMA,
+        password=MYSQL_PASSWORD,
         cursorclass=pymysql.cursors.DictCursor,
         charset="utf8mb4",
     )
+    if database:
+        kwargs['database'] = database
+    return pymysql.connect(**kwargs)
 
 
 def create_schema():
-    conn = pymysql.connect(
-        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
-        password=MYSQL_PASSWORD, charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    conn = get_conn(database=None)
     cursor = conn.cursor()
     cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{SKIN_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
     conn.commit()
@@ -516,30 +644,50 @@ def create_schema():
     print(f"[OK] 数据库 {SKIN_SCHEMA} 已就绪")
 
 
-def create_table(conn, sn: str):
-    t = tbl(sn)
+def create_table(conn, device_id: int):
+    t = tbl(device_id)
     cursor = conn.cursor()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {t} (
-          stat_date        DATE          NOT NULL,
-          scratch_count    INT           NOT NULL DEFAULT 0,
-          baseline_mean    DECIMAL(6,2)  DEFAULT NULL,
-          baseline_std     DECIMAL(6,2)  DEFAULT NULL,
-          zscore           DECIMAL(6,2)  DEFAULT NULL,
-          avg_zscore       DECIMAL(6,2)  DEFAULT NULL,
-          consec_abnormal  INT           NOT NULL DEFAULT 0,
-          eval_phase       TINYINT       NOT NULL DEFAULT 0,
-          threshold_z      DECIMAL(4,2)  DEFAULT NULL,
-          threshold_consec TINYINT       DEFAULT NULL,
-          is_abnormal      TINYINT       NOT NULL DEFAULT 0,
-          alert_triggered  TINYINT       NOT NULL DEFAULT 0,
-          alert_reason     VARCHAR(256)  DEFAULT NULL,
-          data_quality     TINYINT       NOT NULL DEFAULT 0,
-          wear_minutes     INT           NOT NULL DEFAULT 0,
-          PRIMARY KEY (stat_date),
-          INDEX idx_abn (is_abnormal, stat_date),
-          INDEX idx_alt (alert_triggered, stat_date),
-          INDEX idx_dq  (data_quality, stat_date)
+          stat_date_ts      BIGINT        NOT NULL,
+          local_date        VARCHAR(12)   DEFAULT NULL,
+          user_timezone     VARCHAR(32)   DEFAULT NULL,
+          scratch_count     INT           NOT NULL DEFAULT 0,
+          scratch_duration  BIGINT        NOT NULL DEFAULT 0,
+          scratch_avg_dur   INT           NOT NULL DEFAULT 0,
+          scratch_max_dur   INT           NOT NULL DEFAULT 0,
+          night_scratch_count INT         NOT NULL DEFAULT 0,
+          wpeb_score        DECIMAL(10,4) NOT NULL DEFAULT 0,
+          avg_humidity      DECIMAL(5,1)  DEFAULT NULL,
+          baseline_mean     DECIMAL(6,2)  DEFAULT NULL,
+          baseline_std      DECIMAL(6,2)  DEFAULT NULL,
+          temp_coef         DECIMAL(5,3)  DEFAULT NULL,
+          temp_effect       DECIMAL(6,2)  DEFAULT NULL,
+          zscore            DECIMAL(6,2)  DEFAULT NULL,
+          avg_zscore        DECIMAL(6,2)  DEFAULT NULL,
+          consec_abnormal   INT           NOT NULL DEFAULT 0,
+          eval_phase        SMALLINT      NOT NULL DEFAULT 0,
+          threshold_z       DECIMAL(4,2)  DEFAULT NULL,
+          threshold_consec  SMALLINT      DEFAULT NULL,
+          threshold_avgz    DECIMAL(4,2)  DEFAULT NULL,
+          valid_days        INT           NOT NULL DEFAULT 0,
+          is_abnormal       SMALLINT      NOT NULL DEFAULT 0,
+          alert_level       SMALLINT      NOT NULL DEFAULT 0,
+          alert_reason      VARCHAR(256)  DEFAULT NULL,
+          s1_score          DECIMAL(5,1)  NOT NULL DEFAULT 0,
+          s2_score          DECIMAL(5,1)  NOT NULL DEFAULT 0,
+          s3_score          DECIMAL(5,1)  NOT NULL DEFAULT 0,
+          s4_score          DECIMAL(5,1)  NOT NULL DEFAULT 0,
+          s5_score          DECIMAL(5,1)  NOT NULL DEFAULT 0,
+          s6_score          DECIMAL(5,1)  NOT NULL DEFAULT 0,
+          total_score       DECIMAL(6,1)  NOT NULL DEFAULT 0,
+          health_level      SMALLINT      NOT NULL DEFAULT 0,
+          data_quality      SMALLINT      NOT NULL DEFAULT 0,
+          wear_minutes      INT           NOT NULL DEFAULT 0,
+          worn_loose_minutes DECIMAL(8,1) NOT NULL DEFAULT 0,
+          created_at        BIGINT        NOT NULL,
+          updated_at        BIGINT        NOT NULL,
+          PRIMARY KEY (stat_date_ts)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     conn.commit()
@@ -547,27 +695,31 @@ def create_table(conn, sn: str):
     print(f"  [OK] 表 {t} 已就绪")
 
 
-def insert_rows(conn, sn: str, rows: list):
+def insert_rows(conn, device_id: int, rows: list):
     if not rows:
-        print(f"  [{sn}] 无数据，跳过")
+        print(f"  [device_id={device_id}] 无数据，跳过")
         return
 
-    t   = tbl(sn)
+    t   = tbl(device_id)
     sql = f"""
         INSERT IGNORE INTO {t}
-          (stat_date, scratch_count,
-           baseline_mean, baseline_std,
-           zscore, avg_zscore,
-           consec_abnormal, eval_phase,
-           threshold_z, threshold_consec,
-           is_abnormal, alert_triggered, alert_reason,
-           data_quality, wear_minutes)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+          (stat_date_ts, local_date, user_timezone,
+           scratch_count, scratch_duration, scratch_avg_dur, scratch_max_dur,
+           night_scratch_count, wpeb_score, avg_humidity,
+           baseline_mean, baseline_std, temp_coef, temp_effect,
+           zscore, avg_zscore, consec_abnormal, eval_phase,
+           threshold_z, threshold_consec, threshold_avgz,
+           valid_days, is_abnormal, alert_level, alert_reason,
+           s1_score, s2_score, s3_score, s4_score, s5_score, s6_score,
+           total_score, health_level, data_quality,
+           wear_minutes, worn_loose_minutes,
+           created_at, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """
     cursor = conn.cursor()
     cursor.executemany(sql, rows)
     conn.commit()
-    print(f"  [{sn}] 插入 {cursor.rowcount} 条每日评估记录")
+    print(f"  [device_id={device_id}] 插入 {cursor.rowcount} 条每日评估记录")
     cursor.close()
 
 
@@ -576,57 +728,32 @@ def insert_rows(conn, sn: str, rows: list):
 # ══════════════════════════════════════════════════════
 
 def query_summary():
-    conn   = get_conn()
+    conn   = get_conn(database=SKIN_SCHEMA)
     cursor = conn.cursor()
 
     print("\n======= 各设备每日评估概况 =======")
     for sc in SCENARIOS:
-        t = tbl(sc['sn'])
+        t = tbl(sc['device_id'])
         try:
             cursor.execute(f"""
                 SELECT
-                    COUNT(*)                                                     AS 总天数,
-                    SUM(CASE WHEN data_quality = 0 AND eval_phase = 0 THEN 1 ELSE 0 END) AS 热身期,
-                    SUM(CASE WHEN data_quality IN (1,2,3,4) THEN 1 ELSE 0 END)  AS 缺口天,
-                    SUM(CASE WHEN data_quality = 5 THEN 1 ELSE 0 END)           AS 缓冲天,
-                    SUM(is_abnormal)                                             AS 异常天,
-                    SUM(alert_triggered)                                         AS 推送次数,
-                    ROUND(AVG(CASE WHEN data_quality=0 THEN scratch_count END), 1) AS 日均抓挠,
-                    ROUND(MAX(zscore), 2)                                        AS 最高z_score
+                    COUNT(*)                                                          AS total_days,
+                    SUM(CASE WHEN data_quality = 0 AND eval_phase = 0 THEN 1 ELSE 0 END) AS warmup_days,
+                    SUM(CASE WHEN data_quality IN (1,2,3,4) THEN 1 ELSE 0 END)       AS gap_days,
+                    SUM(CASE WHEN data_quality = 5 THEN 1 ELSE 0 END)                AS buffer_days,
+                    SUM(is_abnormal)                                                  AS abnormal_days,
+                    SUM(CASE WHEN alert_level >= 2 THEN 1 ELSE 0 END)                AS alert_count,
+                    ROUND(AVG(CASE WHEN data_quality=0 THEN scratch_count END), 1)   AS avg_scratch,
+                    ROUND(MAX(zscore), 2)                                             AS max_zscore
                 FROM {t}
             """)
             row = cursor.fetchone()
-            print(f"  {sc['sn']:20s}  "
-                  f"总={row['总天数']:3d}天  热身={row['热身期']}  缺口={row['缺口天']}  缓冲={row['缓冲天']}  "
-                  f"异常={row['异常天']}  推送={row['推送次数']}  "
-                  f"日均={row['日均抓挠']}次  最高z={row['最高z_score']}")
+            print(f"  {sc['sn']:12s} (id={sc['device_id']})  "
+                  f"总={row['total_days']:3d}天  热身={row['warmup_days']}  缺口={row['gap_days']}  缓冲={row['buffer_days']}  "
+                  f"异常={row['abnormal_days']}  推送={row['alert_count']}  "
+                  f"日均={row['avg_scratch']}次  最高z={row['max_zscore']}")
         except Exception as e:
-            print(f"  {sc['sn']}: 查询失败 {e}")
-
-    print("\n======= 推送记录明细 =======")
-    found = False
-    for sc in SCENARIOS:
-        t = tbl(sc['sn'])
-        try:
-            cursor.execute(f"""
-                SELECT
-                    stat_date, scratch_count, zscore, avg_zscore,
-                    consec_abnormal, alert_reason
-                FROM {t}
-                WHERE alert_triggered = 1
-                ORDER BY stat_date
-            """)
-            alerts = cursor.fetchall()
-            if alerts:
-                found = True
-                for r in alerts:
-                    print(f"  {sc['sn']:20s}  日期={r[0]}  "
-                          f"次数={r[1]}  z={r[2]}  avgz={r[3]}  "
-                          f"连续={r[4]}天  {r[5]}")
-        except Exception:
-            pass
-    if not found:
-        print("  （暂无推送记录）")
+            print(f"  device_id={sc['device_id']}: 查询失败 {e}")
 
     cursor.close()
     conn.close()
@@ -640,17 +767,17 @@ def main():
     print("=== 第一步：创建模式 ===")
     create_schema()
 
-    conn = get_conn()
+    conn = get_conn(database=SKIN_SCHEMA)
 
     print("\n=== 第二步：建表 ===")
     for sc in SCENARIOS:
-        create_table(conn, sc['sn'])
+        create_table(conn, sc['device_id'])
 
     print("\n=== 第三步：生成并插入每日评估数据 ===")
     for idx, sc in enumerate(SCENARIOS):
         rows = build_daily_rows(sc, seed=42 + idx)
         print(f"  [{sc['sn']}] 生成 {len(rows)} 天数据，开始插入...")
-        insert_rows(conn, sc['sn'], rows)
+        insert_rows(conn, sc['device_id'], rows)
 
     conn.close()
 
