@@ -147,8 +147,6 @@ SC_MAP = {s['sn']: s for s in SCENARIOS}
 # ══════════════════════════════════════════════════════
 #  数据库连接（可选）
 # ══════════════════════════════════════════════════════
-IMU_DB      = 'pet_dog_imu'
-PG_DB       = 'pet_collar'
 SKIN_SCHEMA = 'pet_dog_skin_assessment'
 BSL_SCHEMA  = 'pet_dog_scratch_baseline'
 TD_HOST     = '127.0.0.1'
@@ -156,9 +154,10 @@ TD_PORT     = 6041
 _DB_AVAILABLE = False
 
 try:
-    import psycopg2 as _pg
-    _test = _pg.connect(host='127.0.0.1', port=5432, user='postgres',
-                        password='123456', dbname='pet_collar', connect_timeout=3)
+    import pymysql as _mysql
+    _test = _mysql.connect(host='127.0.0.1', port=3306, user='appuser',
+                           password='123456', database=SKIN_SCHEMA,
+                           connect_timeout=3)
     _test.close()
     _DB_AVAILABLE = True
     print('[OK] 数据库连接成功，使用数据库数据')
@@ -166,9 +165,9 @@ except Exception:
     print('[INFO] 数据库不可用，使用内联生成数据（与数据库内容算法一致）')
 
 
-def _db_read(sql: str) -> pd.DataFrame:
-    conn = _pg.connect(host='127.0.0.1', port=5432, user='postgres',
-                       password='123456', dbname=PG_DB)
+def _db_read(sql: str, db: str = SKIN_SCHEMA) -> pd.DataFrame:
+    conn = _mysql.connect(host='127.0.0.1', port=3306, user='appuser',
+                          password='123456', database=db)
     df = pd.read_sql(sql, conn)
     conn.close()
     return df

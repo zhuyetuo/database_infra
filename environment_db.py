@@ -1,5 +1,5 @@
 """
-环境传感器数据库（PostgreSQL）
+环境传感器数据库（MySQL）
 =====================
 数据库: pet_collar，模式: pet_dog_environment
 每个设备独立一张表: {device_id}
@@ -11,18 +11,20 @@
   env_humidity 环境湿度 %（全局共享序列）
 """
 
-import psycopg2
+import os
+import pymysql
+import pymysql.cursors
 import numpy as np
 from datetime import date, timedelta, datetime, timezone
 
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
-PG_HOST     = "127.0.0.1"
-PG_PORT     = 5432
-PG_USER     = "postgres"
-PG_PASSWORD = "123456"
-PG_DB       = "pet_collar"
+MYSQL_HOST     = os.environ.get("MYSQL_HOST",     "127.0.0.1")
+MYSQL_PORT     = int(os.environ.get("MYSQL_PORT", "3306"))
+MYSQL_USER     = os.environ.get("MYSQL_USER",     "appuser")
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "123456")
+MYSQL_DB       = os.environ.get("MYSQL_DB",       "pet_collar")
 ENV_SCHEMA  = "pet_dog_environment"
 
 DAYS       = 180
@@ -92,7 +94,7 @@ def to_ts(d: date) -> int:
 
 
 def tbl(sn: str) -> str:
-    return f"{ENV_SCHEMA}.{sn.lower()}"
+    return f"`{ENV_SCHEMA}`.`{sn.lower()}`"
 
 
 def is_sick_day(day_idx: int, sc: dict) -> bool:
@@ -153,16 +155,18 @@ def build_env_rows(sc: dict, seed: int = 42) -> list:
 # ══════════════════════════════════════════════════════
 
 def get_conn():
-    return psycopg2.connect(
-        host=PG_HOST, port=PG_PORT, user=PG_USER,
-        password=PG_PASSWORD, dbname=PG_DB
+    return pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, database=MYSQL_DB,
+        cursorclass=pymysql.cursors.DictCursor,
+        charset="utf8mb4",
     )
 
 
 def create_schema():
     conn   = get_conn()
     cursor = conn.cursor()
-    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {ENV_SCHEMA}")
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{ENV_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
     conn.commit()
     cursor.close()
     conn.close()
@@ -174,15 +178,18 @@ def create_table(conn, sn: str):
     cursor = conn.cursor()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {t} (
-          id           BIGSERIAL    PRIMARY KEY,
+          id           BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
           ts           BIGINT       NOT NULL,
-          neck_temp    NUMERIC(5,2) DEFAULT NULL,
-          env_temp     NUMERIC(5,1) NOT NULL,
-          env_humidity NUMERIC(5,1) NOT NULL,
+          neck_temp    DECIMAL(5,2) DEFAULT NULL,
+          env_temp     DECIMAL(5,1) NOT NULL,
+          env_humidity DECIMAL(5,1) NOT NULL,
           UNIQUE (ts)
-        )
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_ts ON {t} (ts)")
+    try:
+        cursor.execute(f"CREATE INDEX {sn}_idx_ts ON {t} (ts)")
+    except Exception:
+        pass
     conn.commit()
     cursor.close()
     print(f"  [OK] 表 {t} 已就绪")
@@ -195,9 +202,8 @@ def insert_rows(conn, sn: str, rows: list):
 
     t   = tbl(sn)
     sql = f"""
-        INSERT INTO {t} (ts, neck_temp, env_temp, env_humidity)
+        INSERT IGNORE INTO {t} (ts, neck_temp, env_temp, env_humidity)
         VALUES (%s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
     """
     cursor = conn.cursor()
     cursor.executemany(sql, rows)
@@ -222,17 +228,17 @@ def query_summary():
                 SELECT
                     COUNT(*)                                             AS total,
                     SUM(CASE WHEN neck_temp IS NULL THEN 1 ELSE 0 END)  AS gap_days,
-                    ROUND(AVG(neck_temp)::numeric, 2)                   AS avg_neck,
-                    ROUND(AVG(env_temp)::numeric, 1)                    AS avg_env_temp,
-                    ROUND(AVG(env_humidity)::numeric, 1)                AS avg_humi,
-                    to_char(to_timestamp(MIN(ts)/1000), 'YYYY-MM-DD')   AS earliest,
-                    to_char(to_timestamp(MAX(ts)/1000), 'YYYY-MM-DD')   AS latest
+                    ROUND(AVG(neck_temp), 2)                            AS avg_neck,
+                    ROUND(AVG(env_temp), 1)                             AS avg_env_temp,
+                    ROUND(AVG(env_humidity), 1)                         AS avg_humi,
+                    DATE_FORMAT(FROM_UNIXTIME(MIN(ts)/1000), '%Y-%m-%d') AS earliest,
+                    DATE_FORMAT(FROM_UNIXTIME(MAX(ts)/1000), '%Y-%m-%d') AS latest
                 FROM {t}
             """)
             row = cursor.fetchone()
-            print(f"  {sc['sn']:20s}  总={int(row[0]):3d}天  缺口={row[1]}天  "
-                  f"脖颈均温={row[2]}°C  环境均温={row[3]}°C  "
-                  f"均湿={row[4]}%  {row[5]} ~ {row[6]}")
+            print(f"  {sc['sn']:20s}  总={int(row['total']):3d}天  缺口={row['gap_days']}天  "
+                  f"脖颈均温={row['avg_neck']}°C  环境均温={row['avg_env_temp']}°C  "
+                  f"均湿={row['avg_humi']}%  {row['earliest']} ~ {row['latest']}")
         except Exception as e:
             print(f"  {sc['sn']}: 查询失败 {e}")
 

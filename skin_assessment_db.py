@@ -15,7 +15,8 @@
   - 缺口处理：基线冻结 → 恢复后缓冲天（data_quality=5）→ 缺口≥30天重置门槛
 """
 
-import psycopg2
+import pymysql
+import pymysql.cursors
 import numpy as np
 import math
 from datetime import date, timedelta, datetime, timezone
@@ -23,12 +24,11 @@ from datetime import date, timedelta, datetime, timezone
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
-PG_HOST     = "127.0.0.1"
-PG_PORT     = 5432
-PG_USER     = "postgres"
-PG_PASSWORD = "123456"
-PG_DB       = "pet_collar"
-SKIN_SCHEMA = "pet_dog_skin_assessment"
+MYSQL_HOST     = "127.0.0.1"
+MYSQL_PORT     = 3306
+MYSQL_USER     = "appuser"
+MYSQL_PASSWORD = "123456"
+SKIN_SCHEMA    = "pet_dog_skin_assessment"
 
 DAYS       = 180
 WARMUP     = 3
@@ -333,7 +333,7 @@ def to_ts(d: date) -> int:
 
 
 def tbl(sn: str) -> str:
-    return f"{SKIN_SCHEMA}.{sn.lower()}"
+    return f"`{SKIN_SCHEMA}`.`{sn.lower()}`"
 
 
 # ══════════════════════════════════════════════════════
@@ -494,20 +494,26 @@ def build_daily_rows(sc: dict, seed: int = 42) -> list:
 # ══════════════════════════════════════════════════════
 
 def get_conn():
-    return psycopg2.connect(
-        host=PG_HOST, port=PG_PORT, user=PG_USER,
-        password=PG_PASSWORD, dbname=PG_DB
+    return pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, database=SKIN_SCHEMA,
+        cursorclass=pymysql.cursors.DictCursor,
+        charset="utf8mb4",
     )
 
 
 def create_schema():
-    conn   = get_conn()
+    conn = pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+    )
     cursor = conn.cursor()
-    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {SKIN_SCHEMA}")
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{SKIN_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
     conn.commit()
     cursor.close()
     conn.close()
-    print(f"[OK] 模式 {SKIN_SCHEMA} 已就绪")
+    print(f"[OK] 数据库 {SKIN_SCHEMA} 已就绪")
 
 
 def create_table(conn, sn: str):
@@ -515,27 +521,27 @@ def create_table(conn, sn: str):
     cursor = conn.cursor()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {t} (
-          stat_date        date          NOT NULL,
-          scratch_count    int           NOT NULL DEFAULT 0,
-          baseline_mean    decimal(6,2)  DEFAULT NULL,
-          baseline_std     decimal(6,2)  DEFAULT NULL,
-          zscore           decimal(6,2)  DEFAULT NULL,
-          avg_zscore       decimal(6,2)  DEFAULT NULL,
-          consec_abnormal  int           NOT NULL DEFAULT 0,
-          eval_phase       SMALLINT      NOT NULL DEFAULT 0,
-          threshold_z      decimal(4,2)  DEFAULT NULL,
-          threshold_consec SMALLINT      DEFAULT NULL,
-          is_abnormal      SMALLINT      NOT NULL DEFAULT 0,
-          alert_triggered  SMALLINT      NOT NULL DEFAULT 0,
+          stat_date        DATE          NOT NULL,
+          scratch_count    INT           NOT NULL DEFAULT 0,
+          baseline_mean    DECIMAL(6,2)  DEFAULT NULL,
+          baseline_std     DECIMAL(6,2)  DEFAULT NULL,
+          zscore           DECIMAL(6,2)  DEFAULT NULL,
+          avg_zscore       DECIMAL(6,2)  DEFAULT NULL,
+          consec_abnormal  INT           NOT NULL DEFAULT 0,
+          eval_phase       TINYINT       NOT NULL DEFAULT 0,
+          threshold_z      DECIMAL(4,2)  DEFAULT NULL,
+          threshold_consec TINYINT       DEFAULT NULL,
+          is_abnormal      TINYINT       NOT NULL DEFAULT 0,
+          alert_triggered  TINYINT       NOT NULL DEFAULT 0,
           alert_reason     VARCHAR(256)  DEFAULT NULL,
-          data_quality     SMALLINT      NOT NULL DEFAULT 0,
-          wear_minutes     int           NOT NULL DEFAULT 0,
-          PRIMARY KEY (stat_date)
-        )
+          data_quality     TINYINT       NOT NULL DEFAULT 0,
+          wear_minutes     INT           NOT NULL DEFAULT 0,
+          PRIMARY KEY (stat_date),
+          INDEX idx_abn (is_abnormal, stat_date),
+          INDEX idx_alt (alert_triggered, stat_date),
+          INDEX idx_dq  (data_quality, stat_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_abn ON {t} (is_abnormal, stat_date)")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_alt ON {t} (alert_triggered, stat_date)")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_dq  ON {t} (data_quality, stat_date)")
     conn.commit()
     cursor.close()
     print(f"  [OK] 表 {t} 已就绪")
@@ -548,7 +554,7 @@ def insert_rows(conn, sn: str, rows: list):
 
     t   = tbl(sn)
     sql = f"""
-        INSERT INTO {t}
+        INSERT IGNORE INTO {t}
           (stat_date, scratch_count,
            baseline_mean, baseline_std,
            zscore, avg_zscore,
@@ -557,7 +563,6 @@ def insert_rows(conn, sn: str, rows: list):
            is_abnormal, alert_triggered, alert_reason,
            data_quality, wear_minutes)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (stat_date) DO NOTHING
     """
     cursor = conn.cursor()
     cursor.executemany(sql, rows)
@@ -586,15 +591,15 @@ def query_summary():
                     SUM(CASE WHEN data_quality = 5 THEN 1 ELSE 0 END)           AS 缓冲天,
                     SUM(is_abnormal)                                             AS 异常天,
                     SUM(alert_triggered)                                         AS 推送次数,
-                    ROUND(AVG(CASE WHEN data_quality=0 THEN scratch_count END)::numeric, 1) AS 日均抓挠,
-                    ROUND(MAX(zscore)::numeric, 2)                               AS 最高z_score
+                    ROUND(AVG(CASE WHEN data_quality=0 THEN scratch_count END), 1) AS 日均抓挠,
+                    ROUND(MAX(zscore), 2)                                        AS 最高z_score
                 FROM {t}
             """)
             row = cursor.fetchone()
             print(f"  {sc['sn']:20s}  "
-                  f"总={row[0]:3d}天  热身={row[1]}  缺口={row[2]}  缓冲={row[3]}  "
-                  f"异常={row[4]}  推送={row[5]}  "
-                  f"日均={row[6]}次  最高z={row[7]}")
+                  f"总={row['总天数']:3d}天  热身={row['热身期']}  缺口={row['缺口天']}  缓冲={row['缓冲天']}  "
+                  f"异常={row['异常天']}  推送={row['推送次数']}  "
+                  f"日均={row['日均抓挠']}次  最高z={row['最高z_score']}")
         except Exception as e:
             print(f"  {sc['sn']}: 查询失败 {e}")
 
