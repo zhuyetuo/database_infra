@@ -1,4 +1,5 @@
-import psycopg2
+import pymysql
+import pymysql.cursors
 import numpy as np
 import math
 from datetime import date, timedelta, datetime, timezone
@@ -6,20 +7,22 @@ from datetime import date, timedelta, datetime, timezone
 # ======================================
 # 数据库连接配置
 # ======================================
-PG_HOST     = "127.0.0.1"
-PG_PORT     = 5432
-PG_USER     = "postgres"
-PG_PASSWORD = "123456"
-PG_DB       = "pet_collar"
-PG_SCHEMA   = "pet_device"
+MYSQL_HOST     = "127.0.0.1"
+MYSQL_PORT     = 3306
+MYSQL_USER     = "appuser"
+MYSQL_PASSWORD = "123456"
+MYSQL_DB       = "pet_collar"
+MYSQL_SCHEMA   = "pet_device"
 
 # ======================================
 # 1. 建表
 # ======================================
 def get_conn():
-    return psycopg2.connect(
-        host=PG_HOST, port=PG_PORT, user=PG_USER,
-        password=PG_PASSWORD, dbname=PG_DB
+    return pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, database=MYSQL_DB,
+        cursorclass=pymysql.cursors.DictCursor,
+        charset="utf8mb4",
     )
 
 
@@ -27,10 +30,10 @@ def create_table():
     conn   = get_conn()
     cursor = conn.cursor()
 
-    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {PG_SCHEMA}")
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
 
     cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS {PG_SCHEMA}.pet_skin_health_daily (
+        CREATE TABLE IF NOT EXISTS `{MYSQL_SCHEMA}`.`pet_skin_health_daily` (
           device_id           VARCHAR(64)   NOT NULL,
           stat_date_ts        BIGINT        NOT NULL,
           scratch_count       SMALLINT      NOT NULL DEFAULT 0,
@@ -59,12 +62,12 @@ def create_table():
           wear_minutes        SMALLINT      NOT NULL DEFAULT 0,
           created_at          BIGINT        NOT NULL,
           updated_at          BIGINT        NOT NULL,
-          PRIMARY KEY (device_id, stat_date_ts)
-        )
+          PRIMARY KEY (device_id, stat_date_ts),
+          INDEX idx_skin_alert    (device_id, alert_triggered, stat_date_ts),
+          INDEX idx_skin_abnormal (device_id, is_abnormal, stat_date_ts),
+          INDEX idx_skin_quality  (device_id, data_quality, stat_date_ts)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_alert    ON {PG_SCHEMA}.pet_skin_health_daily (device_id, alert_triggered, stat_date_ts)")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_abnormal ON {PG_SCHEMA}.pet_skin_health_daily (device_id, is_abnormal, stat_date_ts)")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_skin_quality  ON {PG_SCHEMA}.pet_skin_health_daily (device_id, data_quality, stat_date_ts)")
 
     conn.commit()
     cursor.close()
@@ -393,7 +396,7 @@ def insert_data(rows):
     cursor = conn.cursor()
 
     sql = f"""
-        INSERT INTO {PG_SCHEMA}.pet_skin_health_daily
+        INSERT INTO `{MYSQL_SCHEMA}`.`pet_skin_health_daily`
           (device_id, stat_date_ts,
            scratch_count, scratch_duration, scratch_avg_dur,
            scratch_max_dur, night_scratch_count,
@@ -408,7 +411,7 @@ def insert_data(rows):
           (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
            %s, %s)
-        ON CONFLICT DO NOTHING
+        ON DUPLICATE KEY UPDATE device_id=device_id
     """
 
     cursor.executemany(sql, rows)
@@ -433,12 +436,12 @@ def query_data():
             SUM(is_abnormal)                            AS 异常天,
             SUM(alert_triggered)                        AS 推送次数,
             SUM(CASE WHEN data_quality > 0 THEN 1 ELSE 0 END) AS 缺口或缓冲天,
-            ROUND(AVG(scratch_count)::numeric, 1)       AS 日均抓挠次数,
+            ROUND(AVG(scratch_count), 1)       AS 日均抓挠次数,
             MAX(scratch_count)                          AS 最多单日次数,
-            ROUND(MAX(zscore)::numeric, 2)              AS 最高z_score,
+            ROUND(MAX(zscore), 2)              AS 最高z_score,
             to_char(to_timestamp(MIN(stat_date_ts)/1000), 'YYYY-MM-DD') AS 最早统计日,
             to_char(to_timestamp(MAX(stat_date_ts)/1000), 'YYYY-MM-DD') AS 最晚统计日
-        FROM {PG_SCHEMA}.pet_skin_health_daily
+        FROM `{MYSQL_SCHEMA}`.`pet_skin_health_daily`
         GROUP BY device_id
         ORDER BY device_id
     """)
@@ -452,7 +455,7 @@ def query_data():
             to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             scratch_count, zscore, avg_zscore,
             consec_abnormal, alert_reason
-        FROM {PG_SCHEMA}.pet_skin_health_daily
+        FROM `{MYSQL_SCHEMA}`.`pet_skin_health_daily`
         WHERE alert_triggered = 1
         ORDER BY device_id, stat_date_ts
     """)
@@ -476,7 +479,7 @@ def query_data():
                 WHEN 5 THEN '缓冲天'
             END AS 原因,
             wear_minutes
-        FROM {PG_SCHEMA}.pet_skin_health_daily
+        FROM `{MYSQL_SCHEMA}`.`pet_skin_health_daily`
         WHERE data_quality > 0
         ORDER BY device_id, stat_date_ts
     """)
@@ -491,7 +494,7 @@ def query_data():
             to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             scratch_count, baseline_mean,
             zscore, consec_abnormal, is_abnormal, alert_triggered
-        FROM {PG_SCHEMA}.pet_skin_health_daily
+        FROM `{MYSQL_SCHEMA}`.`pet_skin_health_daily`
         WHERE device_id = 'DEV_002_SICK'
           AND stat_date_ts BETWEEN %s AND %s
         ORDER BY stat_date_ts
@@ -505,7 +508,7 @@ def query_data():
             to_char(to_timestamp(stat_date_ts / 1000), 'YYYY-MM-DD') AS 统计日期,
             valid_days, eval_phase,
             threshold_z, threshold_consec, threshold_avgz
-        FROM {PG_SCHEMA}.pet_skin_health_daily
+        FROM `{MYSQL_SCHEMA}`.`pet_skin_health_daily`
         WHERE device_id = 'DEV_001_NORMAL'
         ORDER BY stat_date_ts
         LIMIT 20

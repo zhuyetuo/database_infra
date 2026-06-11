@@ -1,5 +1,5 @@
 """
-行为识别数据库（PostgreSQL）
+行为识别数据库（MySQL）
 =====================
 数据库: pet_collar，模式: pet_dog_behavior
 每个设备独立一张表: {device_id}
@@ -12,18 +12,20 @@
   confidence   模型置信度 0.0-1.0
 """
 
-import psycopg2
+import os
+import pymysql
+import pymysql.cursors
 import numpy as np
 from datetime import date, timedelta, datetime, timezone
 
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
-PG_HOST     = "127.0.0.1"
-PG_PORT     = 5432
-PG_USER     = "postgres"
-PG_PASSWORD = "123456"
-PG_DB       = "pet_collar"
+MYSQL_HOST     = os.environ.get("MYSQL_HOST",     "127.0.0.1")
+MYSQL_PORT     = int(os.environ.get("MYSQL_PORT", "3306"))
+MYSQL_USER     = os.environ.get("MYSQL_USER",     "appuser")
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "123456")
+MYSQL_DB       = os.environ.get("MYSQL_DB",       "pet_collar")
 BEH_SCHEMA  = "pet_dog_behavior"
 
 DAYS       = 180
@@ -97,7 +99,7 @@ def to_ts(d: date) -> int:
 
 
 def tbl(sn: str) -> str:
-    return f"{BEH_SCHEMA}.{sn.lower()}"
+    return f"`{BEH_SCHEMA}`.`{sn.lower()}`"
 
 
 def is_sick_day(day_idx: int, sc: dict) -> bool:
@@ -207,16 +209,18 @@ def build_scenario_rows(sc: dict, seed: int = 42) -> list:
 # ══════════════════════════════════════════════════════
 
 def get_conn():
-    return psycopg2.connect(
-        host=PG_HOST, port=PG_PORT, user=PG_USER,
-        password=PG_PASSWORD, dbname=PG_DB
+    return pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, database=MYSQL_DB,
+        cursorclass=pymysql.cursors.DictCursor,
+        charset="utf8mb4",
     )
 
 
 def create_schema():
     conn   = get_conn()
     cursor = conn.cursor()
-    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {BEH_SCHEMA}")
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{BEH_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
     conn.commit()
     cursor.close()
     conn.close()
@@ -228,16 +232,22 @@ def create_table(conn, sn: str):
     cursor = conn.cursor()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {t} (
-          id           BIGSERIAL     PRIMARY KEY,
+          id           BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
           ts_start     BIGINT        NOT NULL,
           ts_end       BIGINT        NOT NULL,
-          behavior     SMALLINT      NOT NULL,
-          duration_sec NUMERIC(10,2) NOT NULL,
-          confidence   NUMERIC(5,3)  NOT NULL
-        )
+          behavior     TINYINT       NOT NULL,
+          duration_sec DECIMAL(10,2) NOT NULL,
+          confidence   DECIMAL(5,3)  NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_ts ON {t} (ts_start)")
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS {sn}_idx_beh ON {t} (behavior, ts_start)")
+    try:
+        cursor.execute(f"CREATE INDEX {sn}_idx_ts ON {t} (ts_start)")
+    except Exception:
+        pass
+    try:
+        cursor.execute(f"CREATE INDEX {sn}_idx_beh ON {t} (behavior, ts_start)")
+    except Exception:
+        pass
     conn.commit()
     cursor.close()
     print(f"  [OK] 表 {t} 已就绪")
@@ -250,9 +260,8 @@ def insert_rows(conn, sn: str, rows: list):
 
     t   = tbl(sn)
     sql = f"""
-        INSERT INTO {t} (ts_start, ts_end, behavior, duration_sec, confidence)
+        INSERT IGNORE INTO {t} (ts_start, ts_end, behavior, duration_sec, confidence)
         VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
     """
     cursor     = conn.cursor()
     batch_size = 1000
@@ -283,15 +292,15 @@ def query_summary():
                     SUM(CASE WHEN behavior=1 THEN 1 ELSE 0 END)           AS move_cnt,
                     SUM(CASE WHEN behavior=2 THEN 1 ELSE 0 END)           AS sleep_cnt,
                     SUM(CASE WHEN behavior=3 THEN 1 ELSE 0 END)           AS scratch_cnt,
-                    ROUND(AVG(confidence)::numeric, 3)                    AS avg_conf,
-                    to_char(to_timestamp(MIN(ts_start)/1000), 'YYYY-MM-DD HH24:MI') AS earliest,
-                    to_char(to_timestamp(MAX(ts_end)/1000),   'YYYY-MM-DD HH24:MI') AS latest
+                    ROUND(AVG(confidence), 3)                             AS avg_conf,
+                    DATE_FORMAT(FROM_UNIXTIME(MIN(ts_start)/1000), '%Y-%m-%d %H:%i') AS earliest,
+                    DATE_FORMAT(FROM_UNIXTIME(MAX(ts_end)/1000),   '%Y-%m-%d %H:%i') AS latest
                 FROM {t}
             """)
             row = cursor.fetchone()
-            print(f"  {sc['sn']:20s}  总={int(row[0]):6d}  "
-                  f"运动={row[1]}  睡眠={row[2]}  抓挠={row[3]}  "
-                  f"均置信={row[4]}  {row[5]} ~ {row[6]}")
+            print(f"  {sc['sn']:20s}  总={int(row['total']):6d}  "
+                  f"运动={row['move_cnt']}  睡眠={row['sleep_cnt']}  抓挠={row['scratch_cnt']}  "
+                  f"均置信={row['avg_conf']}  {row['earliest']} ~ {row['latest']}")
         except Exception as e:
             print(f"  {sc['sn']}: 查询失败 {e}")
 

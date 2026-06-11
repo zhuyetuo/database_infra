@@ -11,9 +11,9 @@ Pipeline:
        |
   [behavior recognition]
        |
-  [PostgreSQL behavior] - behavior events (move/sleep/scratch segments)
+  [MySQL behavior] - behavior events (move/sleep/scratch segments)
        |  (after WINDOWS_PER_DAY windows)
-  [PostgreSQL skin_assessment / scratch_baseline] - daily health assessment
+  [MySQL skin_assessment / scratch_baseline] - daily health assessment
 
 All parameters are injected via environment variables set in run_sim.sh.
 """
@@ -23,7 +23,8 @@ import time
 import signal
 import math
 import requests
-import psycopg2
+import pymysql
+import pymysql.cursors
 import numpy as np
 from datetime import datetime, timezone, date, timedelta
 
@@ -52,11 +53,11 @@ TD_USER     = os.environ.get("TD_USER",     "root")
 TD_PASS     = os.environ.get("TD_PASS",     "taosdata")
 TD_DB       = os.environ.get("TD_DB",       "pet_collar_raw")
 
-PG_HOST     = os.environ.get("PG_HOST",     "127.0.0.1")
-PG_PORT     = int(os.environ.get("PG_PORT", "5432"))
-PG_USER     = os.environ.get("PG_USER",     "postgres")
-PG_PASSWORD = os.environ.get("PG_PASSWORD", "123456")
-PG_DB       = os.environ.get("PG_DB",       "pet_collar")
+MYSQL_HOST     = os.environ.get("MYSQL_HOST",     "127.0.0.1")
+MYSQL_PORT     = int(os.environ.get("MYSQL_PORT", "3306"))
+MYSQL_USER     = os.environ.get("MYSQL_USER",     "appuser")
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "123456")
+MYSQL_DB       = os.environ.get("MYSQL_DB",       "pet_collar")
 
 # Window / timing
 WINDOW_MINUTES  = int(os.environ.get("WINDOW_MINUTES",  "15"))  # data window length (min)
@@ -191,81 +192,81 @@ def td_insert_env(device_id: int, env_samples: list, neck_samples: list):
 
 
 # ============================================================
-#  PostgreSQL
+#  MySQL
 # ============================================================
 
-def pg_conn():
-    return psycopg2.connect(
-        host=PG_HOST, port=PG_PORT, user=PG_USER,
-        password=PG_PASSWORD, dbname=PG_DB
+def mysql_conn():
+    return pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, database=MYSQL_DB,
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=False,
     )
 
 
-def pg_init():
-    conn = pg_conn()
+def mysql_init():
+    conn = mysql_conn()
     cur  = conn.cursor()
 
-    for schema in ["pet_dog_behavior", "pet_dog_skin_assessment", "pet_dog_scratch_baseline"]:
-        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+    for db in ["pet_dog_behavior", "pet_dog_skin_assessment", "pet_dog_scratch_baseline"]:
+        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
 
     for dev in DEVICES:
         device_id = dev["device_id"]
 
-        # behavior: one row per recognized behavior segment
         cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS pet_dog_behavior.d{device_id} (
-                id           BIGSERIAL     PRIMARY KEY,
-                ts_start     BIGINT        NOT NULL,
-                ts_end       BIGINT        NOT NULL,
-                behavior     SMALLINT      NOT NULL,
-                duration_sec NUMERIC(10,2) NOT NULL,
-                confidence   NUMERIC(5,3)  NOT NULL,
-                ax_mean      NUMERIC(8,2),
-                ay_mean      NUMERIC(8,2),
-                az_mean      NUMERIC(8,2),
-                gx_mean      NUMERIC(8,2),
-                gy_mean      NUMERIC(8,2),
-                gz_mean      NUMERIC(8,2)
-            )
+            CREATE TABLE IF NOT EXISTS `pet_dog_behavior`.`d{device_id}` (
+                id           BIGINT         NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                ts_start     BIGINT         NOT NULL,
+                ts_end       BIGINT         NOT NULL,
+                behavior     TINYINT        NOT NULL,
+                duration_sec DECIMAL(10,2)  NOT NULL,
+                confidence   DECIMAL(5,3)   NOT NULL,
+                ax_mean      DECIMAL(8,2),
+                ay_mean      DECIMAL(8,2),
+                az_mean      DECIMAL(8,2),
+                gx_mean      DECIMAL(8,2),
+                gy_mean      DECIMAL(8,2),
+                gz_mean      DECIMAL(8,2),
+                INDEX idx_ts_start (ts_start)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
-        cur.execute(f"CREATE INDEX IF NOT EXISTS d{device_id}_beh_ts "
-                    f"ON pet_dog_behavior.d{device_id} (ts_start)")
 
         cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS pet_dog_skin_assessment.d{device_id} (
-                stat_date        DATE         PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS `pet_dog_skin_assessment`.`d{device_id}` (
+                stat_date        DATE         NOT NULL PRIMARY KEY,
                 scratch_count    INT          NOT NULL DEFAULT 0,
-                baseline_mean    NUMERIC(6,2),
-                baseline_std     NUMERIC(6,2),
-                zscore           NUMERIC(6,2),
-                avg_zscore       NUMERIC(6,2),
+                baseline_mean    DECIMAL(6,2),
+                baseline_std     DECIMAL(6,2),
+                zscore           DECIMAL(6,2),
+                avg_zscore       DECIMAL(6,2),
                 consec_abnormal  INT          NOT NULL DEFAULT 0,
-                eval_phase       SMALLINT     NOT NULL DEFAULT 0,
-                threshold_z      NUMERIC(4,2),
-                threshold_consec SMALLINT,
-                is_abnormal      SMALLINT     NOT NULL DEFAULT 0,
-                alert_triggered  SMALLINT     NOT NULL DEFAULT 0,
+                eval_phase       TINYINT      NOT NULL DEFAULT 0,
+                threshold_z      DECIMAL(4,2),
+                threshold_consec TINYINT,
+                is_abnormal      TINYINT      NOT NULL DEFAULT 0,
+                alert_triggered  TINYINT      NOT NULL DEFAULT 0,
                 alert_reason     VARCHAR(256),
-                data_quality     SMALLINT     NOT NULL DEFAULT 0,
+                data_quality     TINYINT      NOT NULL DEFAULT 0,
                 wear_minutes     INT          NOT NULL DEFAULT 0
-            )
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
 
         cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS pet_dog_scratch_baseline.d{device_id} (
-                stat_date     DATE         PRIMARY KEY,
-                baseline_mean NUMERIC(6,2) NOT NULL,
-                baseline_std  NUMERIC(6,2) NOT NULL,
-                temp_coef     NUMERIC(5,3) NOT NULL DEFAULT 0,
-                confidence    NUMERIC(4,2) NOT NULL DEFAULT 0,
+            CREATE TABLE IF NOT EXISTS `pet_dog_scratch_baseline`.`d{device_id}` (
+                stat_date     DATE         NOT NULL PRIMARY KEY,
+                baseline_mean DECIMAL(6,2) NOT NULL,
+                baseline_std  DECIMAL(6,2) NOT NULL,
+                temp_coef     DECIMAL(5,3) NOT NULL DEFAULT 0,
+                confidence    DECIMAL(4,2) NOT NULL DEFAULT 0,
                 valid_days    INT          NOT NULL DEFAULT 0
-            )
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
 
     conn.commit()
     cur.close()
     conn.close()
-    print("[PostgreSQL] all tables ready")
+    print("[MySQL] all tables ready")
 
 
 # ============================================================
@@ -323,7 +324,7 @@ def generate_imu_window(window_start_ms: int, si: float) -> tuple:
 
     Returns:
       raw_samples  - list of (ts_ms, ax, ay, az, gx, gy, gz)  -> TDengine
-      segments     - list of dicts (recognized behavior events) -> PostgreSQL
+      segments     - list of dicts (recognized behavior events) -> MySQL
     """
     step_ms     = int(1000 / IMU_SAMPLE_HZ)
     total_steps = WINDOW_SECONDS * IMU_SAMPLE_HZ
@@ -435,21 +436,20 @@ def generate_env_window(window_start_ms: int, day_idx: int, si: float) -> tuple:
 
 
 # ============================================================
-#  PostgreSQL: write behavior events
+#  MySQL: write behavior events
 # ============================================================
 
-def pg_insert_behavior(conn, device_id: int, segments: list) -> int:
+def mysql_insert_behavior(conn, device_id: int, segments: list) -> int:
     """Write behavior segments, return scratch count."""
     if not segments:
         return 0
     cur = conn.cursor()
     cur.executemany(
         f"""
-        INSERT INTO pet_dog_behavior.d{device_id}
+        INSERT IGNORE INTO `pet_dog_behavior`.`d{device_id}`
             (ts_start, ts_end, behavior, duration_sec, confidence,
              ax_mean, ay_mean, az_mean, gx_mean, gy_mean, gz_mean)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT DO NOTHING
         """,
         [(s["ts_start"], s["ts_end"], s["behavior"], s["duration_sec"], s["confidence"],
           s["ax_mean"], s["ay_mean"], s["az_mean"],
@@ -497,11 +497,11 @@ def settle_day(conn, state):
     if state.day_idx < WARMUP:
         state.buf_c.append(count)
         cur.execute(
-            f"""INSERT INTO pet_dog_skin_assessment.d{state.device_id}
+            f"""INSERT INTO `pet_dog_skin_assessment`.`d{state.device_id}`
                 (stat_date, scratch_count, eval_phase, data_quality, wear_minutes)
                 VALUES (%s,%s,0,0,%s)
-                ON CONFLICT (stat_date) DO UPDATE
-                  SET scratch_count=EXCLUDED.scratch_count, wear_minutes=EXCLUDED.wear_minutes""",
+                ON DUPLICATE KEY UPDATE
+                  scratch_count=VALUES(scratch_count), wear_minutes=VALUES(wear_minutes)""",
             (stat_date, count, wear_min),
         )
         conn.commit(); cur.close()
@@ -541,22 +541,23 @@ def settle_day(conn, state):
               if alert else None)
 
     cur.execute(
-        f"""INSERT INTO pet_dog_skin_assessment.d{state.device_id}
+        f"""INSERT INTO `pet_dog_skin_assessment`.`d{state.device_id}`
             (stat_date, scratch_count, baseline_mean, baseline_std,
              zscore, avg_zscore, consec_abnormal, eval_phase,
              threshold_z, threshold_consec, is_abnormal, alert_triggered,
              alert_reason, data_quality, wear_minutes)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s)
-            ON CONFLICT (stat_date) DO UPDATE
-              SET scratch_count=EXCLUDED.scratch_count,
-                  baseline_mean=EXCLUDED.baseline_mean,
-                  baseline_std=EXCLUDED.baseline_std,
-                  zscore=EXCLUDED.zscore, avg_zscore=EXCLUDED.avg_zscore,
-                  consec_abnormal=EXCLUDED.consec_abnormal,
-                  is_abnormal=EXCLUDED.is_abnormal,
-                  alert_triggered=EXCLUDED.alert_triggered,
-                  alert_reason=EXCLUDED.alert_reason,
-                  wear_minutes=EXCLUDED.wear_minutes""",
+            ON DUPLICATE KEY UPDATE
+              scratch_count=VALUES(scratch_count),
+              baseline_mean=VALUES(baseline_mean),
+              baseline_std=VALUES(baseline_std),
+              zscore=VALUES(zscore),
+              avg_zscore=VALUES(avg_zscore),
+              consec_abnormal=VALUES(consec_abnormal),
+              is_abnormal=VALUES(is_abnormal),
+              alert_triggered=VALUES(alert_triggered),
+              alert_reason=VALUES(alert_reason),
+              wear_minutes=VALUES(wear_minutes)""",
         (stat_date, count,
          round(state.mean, 2), round(state.std, 2), zscore, avg_z,
          state.consec, _phase(state.valid_days),
@@ -565,15 +566,15 @@ def settle_day(conn, state):
 
     confidence = round(min(1.0, state.valid_days / 30), 2)
     cur.execute(
-        f"""INSERT INTO pet_dog_scratch_baseline.d{state.device_id}
+        f"""INSERT INTO `pet_dog_scratch_baseline`.`d{state.device_id}`
             (stat_date, baseline_mean, baseline_std, temp_coef, confidence, valid_days)
             VALUES (%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (stat_date) DO UPDATE
-              SET baseline_mean=EXCLUDED.baseline_mean,
-                  baseline_std=EXCLUDED.baseline_std,
-                  temp_coef=EXCLUDED.temp_coef,
-                  confidence=EXCLUDED.confidence,
-                  valid_days=EXCLUDED.valid_days""",
+            ON DUPLICATE KEY UPDATE
+              baseline_mean=VALUES(baseline_mean),
+              baseline_std=VALUES(baseline_std),
+              temp_coef=VALUES(temp_coef),
+              confidence=VALUES(confidence),
+              valid_days=VALUES(valid_days)""",
         (stat_date, round(state.mean, 2), round(state.std, 2), coef, confidence, state.valid_days),
     )
 
@@ -634,11 +635,11 @@ def process_window(state, conn, window_ts_ms):
 
     scratch_in_window = 0
     try:
-        scratch_in_window      = pg_insert_behavior(conn, state.device_id, segments)
+        scratch_in_window      = mysql_insert_behavior(conn, state.device_id, segments)
         state.day_scratch_count += scratch_in_window
     except Exception as e:
         conn.rollback()
-        print(f"    [warn] PG behavior write failed: {e}")
+        print(f"    [warn] MySQL behavior write failed: {e}")
 
     # --- Env + neck temp: generate samples at configured intervals ---
     env_samples, neck_samples = generate_env_window(window_ts_ms, state.day_idx, si)
@@ -705,11 +706,11 @@ def main():
 
     print("\n[init] TDengine...")
     td_init()
-    print("[init] PostgreSQL...")
-    pg_init()
+    print("[init] MySQL...")
+    mysql_init()
 
     states  = [DeviceState(d["device_id"], d["sick"]) for d in DEVICES]
-    conn    = pg_conn()
+    conn    = mysql_conn()
     base_ms = _now_ms()
     win_idx = 0
 

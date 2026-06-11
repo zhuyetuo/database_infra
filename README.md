@@ -1,6 +1,6 @@
 # database_infra
 
-本地 PostgreSQL 16 + TDengine 3 测试环境，仅用于宠物项圈皮肤健康监测算法的数据模拟与验证。
+本地 MySQL 8 + TDengine 3 测试环境，仅用于宠物项圈皮肤健康监测算法的数据模拟与验证。
 
 ---
 
@@ -8,21 +8,21 @@
 
 ```
 database_infra/
-├── docker-compose.yml        # PostgreSQL + TDengine 容器配置
-├── .env                      # 容器环境变量（PostgreSQL 密码、默认库名）
+├── docker-compose.yml        # MySQL + TDengine 容器配置
+├── .env                      # 容器环境变量（MySQL 密码、默认库名）
 ├── sim_config.env            # 模拟器统一配置（采样率、窗口时长、数据库连接等）
-├── postgres-data/            # PostgreSQL 数据持久化目录（自动创建）
+├── mysql-data/               # MySQL 数据持久化目录（自动创建）
 ├── tdengine-data/            # TDengine 数据持久化目录（自动创建）
 ├── imu_raw_db.py             # TDengine 批量写入：IMU / 环境温湿度 / 颈温原始采样点（24 设备 × 180 天）
 ├── imu_scale_db.py           # TDengine 万设备级批量写入（默认 10,000 设备 × 180 天，asyncio + aiohttp）
-├── pg_seed.py                # PostgreSQL 初始化：pet_device schema、用户表、设备绑定历史
-├── sim_devices.py            # 实时模拟器：双设备持续生成传感器数据写入 TDengine + PostgreSQL
+├── mysql_seed.py             # MySQL 初始化：pet_device database、用户表、设备绑定历史
+├── sim_devices.py            # 实时模拟器：双设备持续生成传感器数据写入 TDengine + MySQL
 ├── run_sim.sh                # 模拟器启动脚本（source sim_config.env 后运行 sim_devices.py）
-├── environment_db.py         # 创建 pet_dog_environment 模式（PostgreSQL）+ 生成环境传感器数据
-├── behavior_db.py            # 创建 pet_dog_behavior 模式（PostgreSQL）+ 生成行为识别事件数据
-├── skin_assessment_db.py     # 创建 pet_dog_skin_assessment 模式（PostgreSQL）+ 生成皮肤健康评估数据
-├── scratch_baseline_db.py    # 创建 pet_dog_scratch_baseline 模式（PostgreSQL）+ 生成抓挠基线快照数据
-├── skin_health_db.py         # 创建 pet_device 模式（PostgreSQL）+ 生成综合皮肤健康日报数据
+├── environment_db.py         # 创建 pet_dog_environment 模式（MySQL）+ 生成环境传感器数据
+├── behavior_db.py            # 创建 pet_dog_behavior 模式（MySQL）+ 生成行为识别事件数据
+├── skin_assessment_db.py     # 创建 pet_dog_skin_assessment 模式（MySQL）+ 生成皮肤健康评估数据
+├── scratch_baseline_db.py    # 创建 pet_dog_scratch_baseline 模式（MySQL）+ 生成抓挠基线快照数据
+├── skin_health_db.py         # 创建 pet_device 模式（MySQL）+ 生成综合皮肤健康日报数据
 ├── visualize_db.py           # 从数据库读取数据，生成 6 张可视化图表
 └── charts/                   # 可视化输出图片目录
 ```
@@ -47,10 +47,10 @@ docker ps
 ### 2. 初始化应用数据（用户 & 设备绑定）
 
 ```bash
-python pg_seed.py
+python mysql_seed.py
 ```
 
-在 PostgreSQL `pet_collar` 数据库的 `pet_device` schema 下建表并写入种子数据：
+在 MySQL `pet_device` database 下建表并写入种子数据：
 
 **用户分布（12 人）**
 
@@ -130,7 +130,7 @@ bash run_sim.sh
 ### 3. 生成可视化图表
 
 ```bash
-pip install matplotlib pandas psycopg2-binary requests   # 首次需安装
+pip install matplotlib pandas mysql-connector-python requests   # 首次需安装
 python visualize_db.py          # 图表输出到 ./charts/
 ```
 
@@ -146,7 +146,7 @@ python visualize_db.py          # 图表输出到 ./charts/
 docker compose up -d          # 后台启动所有容器
 docker compose ps             # 查看运行状态（STATUS = healthy 即可用）
 docker compose logs -f        # 实时查看日志（Ctrl+C 退出）
-docker compose logs postgres  # 只看 PostgreSQL 日志
+docker compose logs mysql     # 只看 MySQL 日志
 docker compose logs tdengine  # 只看 TDengine 日志
 ```
 
@@ -168,11 +168,11 @@ docker compose down --rmi all # 同上，同时删除镜像
 ### 单独操作某个容器
 
 ```bash
-docker compose stop postgres
+docker compose stop mysql
 docker compose stop tdengine
-docker compose start postgres
+docker compose start mysql
 docker compose start tdengine
-docker compose restart postgres
+docker compose restart mysql
 ```
 
 ### 其他常用
@@ -219,52 +219,34 @@ done
 docker exec local-tdengine3 taos -s 'DROP DATABASE IF EXISTS pet_collar_raw'
 ```
 
-### PostgreSQL — 删除全部子表数据
+### MySQL — 删除全部子表数据
 
 ```bash
-# 逐表清空（保留表结构）
-docker exec -i local-postgres16 psql -U postgres -d pet_collar <<'EOF'
-DO $$ DECLARE t TEXT; BEGIN
-  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_behavior'
-  LOOP EXECUTE 'TRUNCATE TABLE pet_dog_behavior.' || t; END LOOP;
-END $$;
-DO $$ DECLARE t TEXT; BEGIN
-  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_environment'
-  LOOP EXECUTE 'TRUNCATE TABLE pet_dog_environment.' || t; END LOOP;
-END $$;
-DO $$ DECLARE t TEXT; BEGIN
-  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_skin_assessment'
-  LOOP EXECUTE 'TRUNCATE TABLE pet_dog_skin_assessment.' || t; END LOOP;
-END $$;
-DO $$ DECLARE t TEXT; BEGIN
-  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'pet_dog_scratch_baseline'
-  LOOP EXECUTE 'TRUNCATE TABLE pet_dog_scratch_baseline.' || t; END LOOP;
-END $$;
-EOF
+# 删除整个业务数据库再重建（最简单）
+docker exec local-mysql8 mysql -u appuser -p123456 -e "
+  DROP DATABASE IF EXISTS pet_dog_behavior;
+  DROP DATABASE IF EXISTS pet_dog_skin_assessment;
+  DROP DATABASE IF EXISTS pet_dog_scratch_baseline;
+"
 ```
 
 ```bash
-# 或直接删除整个 schema（含所有表）再重建
-docker exec -i local-postgres16 psql -U postgres -d pet_collar <<'EOF'
-DROP SCHEMA IF EXISTS pet_dog_behavior CASCADE;
-DROP SCHEMA IF EXISTS pet_dog_environment CASCADE;
-DROP SCHEMA IF EXISTS pet_dog_skin_assessment CASCADE;
-DROP SCHEMA IF EXISTS pet_dog_scratch_baseline CASCADE;
-DROP SCHEMA IF EXISTS public CASCADE;
-CREATE SCHEMA public;
-EOF
+# 同时清除种子数据库
+docker exec local-mysql8 mysql -u appuser -p123456 -e "
+  DROP DATABASE IF EXISTS pet_device;
+"
 ```
 
 ---
 
 ## 连接信息
 
-### PostgreSQL
+### MySQL
 
 ```
 host:     127.0.0.1
-port:     5432
-user:     postgres
+port:     3306
+user:     appuser
 password: 123456
 database: pet_collar
 ```
@@ -277,7 +259,7 @@ port:     6041 (REST API)
 port:     6030 (native)
 user:     root
 password: taosdata
-database: pet_dog_imu
+database: pet_collar_raw
 ```
 
 连接 TDengine REST API 示例：
@@ -300,10 +282,10 @@ curl -sf http://127.0.0.1:6041/rest/sql \
 
 ### 架构设计
 
-- **TDengine** (`pet_dog_imu`): 存储高频 IMU 6轴传感器原始事件数据，利用时序数据库的超级表机制按设备分子表
-- **PostgreSQL** (`pet_collar`): 存储所有经过算法处理的结构化数据，按功能域分模式（schema）
+- **TDengine** (`pet_collar_raw`): 存储高频 IMU 6轴传感器原始事件数据，利用时序数据库的超级表机制按设备分子表
+- **MySQL** (`pet_collar`): 存储所有经过算法处理的结构化数据，按功能域分数据库
 
-### 1. TDengine — `pet_dog_imu`（IMU 原始事件）
+### 1. TDengine — `pet_collar_raw`（IMU 原始事件）
 
 超级表 `imu_events`，每个设备一张子表（`device_id_1` ~ `device_id_24`），每行为一次连续行为片段的 IMU 特征摘要。
 
@@ -321,7 +303,7 @@ curl -sf http://127.0.0.1:6041/rest/sql \
 | `gz` | FLOAT | 陀螺仪 Z 轴均值（deg/s） |
 | `device_id` | BINARY(32) | 设备序列号（TAG） |
 
-### 2. PostgreSQL 模式 `pet_dog_environment`（环境传感器）
+### 2. MySQL 数据库 `pet_dog_environment`（环境传感器）
 
 每个设备一张独立表，每行为一天一条传感器采样记录。
 
@@ -335,7 +317,7 @@ curl -sf http://127.0.0.1:6041/rest/sql \
 | `env_temp` | NUMERIC(5,1) | 环境温度 °C（全局共享序列） |
 | `env_humidity` | NUMERIC(5,1) | 环境湿度 %（全局共享序列） |
 
-### 3. PostgreSQL 模式 `pet_dog_behavior`（行为识别事件）
+### 3. MySQL 数据库 `pet_dog_behavior`（行为识别事件）
 
 每个设备一张独立表，每行为 ML 模型输出的一次行为识别事件。
 
@@ -350,7 +332,7 @@ curl -sf http://127.0.0.1:6041/rest/sql \
 | `duration_sec` | NUMERIC(10,2) | 持续时长（秒） |
 | `confidence` | NUMERIC(5,3) | 模型置信度（0.000~1.000） |
 
-### 4. PostgreSQL 模式 `pet_dog_skin_assessment`（皮肤健康评估）
+### 4. MySQL 数据库 `pet_dog_skin_assessment`（皮肤健康评估）
 
 每个设备一张独立表，每行为一天的评估结果，由 EWMA 动态基线 + z-score 算法生成。
 
@@ -374,7 +356,7 @@ curl -sf http://127.0.0.1:6041/rest/sql \
 | `data_quality` | SMALLINT | 数据质量：0=正常  1=未佩戴  2=没电  3=信号丢失  4=松动  5=缓冲天 |
 | `wear_minutes` | INT | 有效佩戴分钟数 |
 
-### 5. PostgreSQL 模式 `pet_dog_scratch_baseline`（抓挠基线快照）
+### 5. MySQL 数据库 `pet_dog_scratch_baseline`（抓挠基线快照）
 
 每个设备一张独立表，每行为当天算法运行后的基线状态快照。缺口天不保存快照。
 

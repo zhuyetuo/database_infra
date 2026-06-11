@@ -1,7 +1,7 @@
 """
-抓挠基线数据库（PostgreSQL）
+抓挠基线数据库（MySQL）
 =====================
-数据库: pet_collar，模式: pet_dog_scratch_baseline
+数据库: pet_dog_scratch_baseline
 每个设备独立一张表: {device_id}
 
 每行 = 当天算法运行后的基线快照
@@ -13,7 +13,8 @@
   valid_days     参与计算的有效正常天数
 """
 
-import psycopg2
+import pymysql
+import pymysql.cursors
 import numpy as np
 import math
 from datetime import date, timedelta, datetime, timezone
@@ -21,12 +22,11 @@ from datetime import date, timedelta, datetime, timezone
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
-PG_HOST     = "127.0.0.1"
-PG_PORT     = 5432
-PG_USER     = "postgres"
-PG_PASSWORD = "123456"
-PG_DB       = "pet_collar"
-BSL_SCHEMA  = "pet_dog_scratch_baseline"
+MYSQL_HOST     = "127.0.0.1"
+MYSQL_PORT     = 3306
+MYSQL_USER     = "appuser"
+MYSQL_PASSWORD = "123456"
+BSL_SCHEMA     = "pet_dog_scratch_baseline"
 
 DAYS       = 180
 WARMUP     = 3
@@ -312,7 +312,7 @@ def to_date(d: date) -> str:
 
 
 def tbl(sn: str) -> str:
-    return f"{BSL_SCHEMA}.{sn.lower()}"
+    return f"`{BSL_SCHEMA}`.`{sn.lower()}`"
 
 
 # ══════════════════════════════════════════════════════
@@ -430,20 +430,27 @@ def build_baseline_rows(sc: dict, seed: int = 42) -> list:
 # ══════════════════════════════════════════════════════
 
 def get_conn():
-    return psycopg2.connect(
-        host=PG_HOST, port=PG_PORT, user=PG_USER,
-        password=PG_PASSWORD, dbname=PG_DB
+    return pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, database=BSL_SCHEMA,
+        cursorclass=pymysql.cursors.DictCursor,
+        charset="utf8mb4",
     )
 
 
 def create_schema():
-    conn   = get_conn()
+    # 连接不指定 database，先建库
+    conn   = pymysql.connect(
+        host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+    )
     cursor = conn.cursor()
-    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {BSL_SCHEMA}")
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{BSL_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
     conn.commit()
     cursor.close()
     conn.close()
-    print(f"[OK] 模式 {BSL_SCHEMA} 已就绪")
+    print(f"[OK] 数据库 {BSL_SCHEMA} 已就绪")
 
 
 def create_table(conn, sn: str):
@@ -451,14 +458,14 @@ def create_table(conn, sn: str):
     cursor = conn.cursor()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {t} (
-          stat_date     date          NOT NULL,
-          baseline_mean decimal(6,2)  NOT NULL,
-          baseline_std  decimal(6,2)  NOT NULL,
-          temp_coef     decimal(5,3)  NOT NULL DEFAULT 0.000,
-          confidence    decimal(4,2)  NOT NULL DEFAULT 0.00,
-          valid_days    int           NOT NULL DEFAULT 0,
+          stat_date     DATE          NOT NULL,
+          baseline_mean DECIMAL(6,2)  NOT NULL,
+          baseline_std  DECIMAL(6,2)  NOT NULL,
+          temp_coef     DECIMAL(5,3)  NOT NULL DEFAULT 0.000,
+          confidence    DECIMAL(4,2)  NOT NULL DEFAULT 0.00,
+          valid_days    INT           NOT NULL DEFAULT 0,
           PRIMARY KEY (stat_date)
-        )
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     conn.commit()
     cursor.close()
@@ -472,11 +479,10 @@ def insert_rows(conn, sn: str, rows: list):
 
     t   = tbl(sn)
     sql = f"""
-        INSERT INTO {t}
+        INSERT IGNORE INTO {t}
           (stat_date, baseline_mean, baseline_std,
            temp_coef, confidence, valid_days)
         VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (stat_date) DO NOTHING
     """
     cursor = conn.cursor()
     cursor.executemany(sql, rows)
@@ -501,19 +507,19 @@ def query_summary():
                 SELECT
                     COUNT(*)                        AS total,
                     MAX(valid_days)                 AS max_valid_days,
-                    ROUND(MAX(confidence)::numeric, 2)    AS max_conf,
-                    ROUND(AVG(baseline_mean)::numeric, 2) AS avg_mean,
-                    ROUND(AVG(baseline_std)::numeric, 2)  AS avg_std,
-                    ROUND(AVG(temp_coef)::numeric, 3)     AS avg_coef,
+                    ROUND(MAX(confidence), 2)    AS max_conf,
+                    ROUND(AVG(baseline_mean), 2) AS avg_mean,
+                    ROUND(AVG(baseline_std), 2)  AS avg_std,
+                    ROUND(AVG(temp_coef), 3)     AS avg_coef,
                     MIN(stat_date)                  AS earliest,
                     MAX(stat_date)                  AS latest
                 FROM {t}
             """)
             row = cursor.fetchone()
-            print(f"  {sc['sn']:20s}  快照={int(row[0]):3d}天  "
-                  f"最终有效天={row[1]}  置信度={row[2]}  "
-                  f"均值={row[3]}  标准差={row[4]}  温度系数={row[5]}  "
-                  f"{row[6]} ~ {row[7]}")
+            print(f"  {sc['sn']:20s}  快照={int(row['total']):3d}天  "
+                  f"最终有效天={row['max_valid_days']}  置信度={row['max_conf']}  "
+                  f"均值={row['avg_mean']}  标准差={row['avg_std']}  温度系数={row['avg_coef']}  "
+                  f"{row['earliest']} ~ {row['latest']}")
         except Exception as e:
             print(f"  {sc['sn']}: 查询失败 {e}")
 
