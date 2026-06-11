@@ -17,6 +17,23 @@ services:
       timeout: 5s
       retries: 5
 
+  app:
+    image: python:3.11-slim
+    container_name: local-app
+    working_dir: /app
+    volumes:
+      - .:/app
+    env_file: sim_config.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      tdengine:
+        condition: service_healthy
+    command: >
+      bash -c "pip install pymysql aiohttp numpy requests --quiet &&
+               tail -f /dev/null"
+    restart: always
+
   tdengine:
     image: tdengine/tdengine:3.3.4.3
     container_name: local-tdengine3
