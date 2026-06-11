@@ -1,8 +1,8 @@
 """
 行为识别数据库（MySQL）
 =====================
-数据库: pet_collar，模式: pet_dog_behavior
-每个设备独立一张表: {device_id}
+数据库: pet_dog_behavior
+每个设备独立一张表: d_{device_id}
 
 每行 = ML 模型输出的一个行为事件
   ts_start     行为开始时间 UTC ms
@@ -10,6 +10,9 @@
   behavior     1=运动 2=睡眠 3=抓挠
   duration_sec 持续时长 秒
   confidence   模型置信度 0.0-1.0
+  local_start  本地时间字符串
+  local_end    本地时间字符串
+  user_timezone 时区字符串
 """
 
 import os
@@ -19,13 +22,30 @@ import numpy as np
 from datetime import date, timedelta, datetime, timezone
 
 # ══════════════════════════════════════════════════════
+#  加载 sim_config.env
+# ══════════════════════════════════════════════════════
+def _load_config(path: str = "sim_config.env"):
+    here = os.path.dirname(os.path.abspath(__file__))
+    fpath = os.path.join(here, path)
+    if not os.path.exists(fpath):
+        return
+    with open(fpath) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+_load_config()
+
+# ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
 MYSQL_HOST     = os.environ.get("MYSQL_HOST",     "127.0.0.1")
 MYSQL_PORT     = int(os.environ.get("MYSQL_PORT", "3306"))
-MYSQL_USER     = os.environ.get("MYSQL_USER",     "appuser")
-MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "123456")
-MYSQL_DB       = os.environ.get("MYSQL_DB",       "pet_collar")
+MYSQL_USER     = os.environ.get("MYSQL_USER",     "root")
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "Hicc-mysql-2026")
 BEH_SCHEMA  = "pet_dog_behavior"
 
 DAYS       = 180
@@ -63,30 +83,30 @@ np.random.seed(42)
 #  场景定义（24 个）
 # ══════════════════════════════════════════════════════
 SCENARIOS = [
-    {'sn': 'device_id_1',  'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
-    {'sn': 'device_id_2',  'phases': [(0, 60, 10.0, 2.0), (60, 80, 30.0, 4.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 80)},
-    {'sn': 'device_id_3',  'phases': [(0, 60, 10.0, 2.0), (60, 180, 28.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 180)},
-    {'sn': 'device_id_4',  'phases': [(0, 40, 10.0, 2.0), (40, 55, 28.0, 4.0), (55, 120, 10.0, 2.0), (120, 135, 30.0, 4.0), (135, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'sick_episodes': [(40, 55), (120, 135)]},
-    {'sn': 'device_id_5',  'phases': [(0, 60, 10.0, 2.0), (60, 120, 15.0, 2.0), (120, 180, 22.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
-    {'sn': 'device_id_6',  'phases': [(0, 90, 10.0, 2.0), (90, 180, 25.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': (90, 180)},
-    {'sn': 'device_id_7',  'phases': [(0, 50, 10.0, 2.0), (50, 80, 45.0, 6.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (50, 80)},
-    {'sn': 'device_id_8',  'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.35, 'gaps': [], 'sick': None},
-    {'sn': 'device_id_9',  'phases': [(0, 30, 10.0, 2.0), (30, 90, 3.0, 1.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
-    {'sn': 'device_id_10', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(35, 38, 'unworn')], 'sick': None},
-    {'sn': 'device_id_11', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(40, 45, 'battery')], 'sick': None},
-    {'sn': 'device_id_12', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(30, 65, 'battery')], 'sick': None},
-    {'sn': 'device_id_13', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)], 'sick': None},
-    {'sn': 'device_id_14', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(50, 58, 'loose')], 'sick': None},
-    {'sn': 'device_id_15', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(88, 92, 'battery')], 'sick': None},
-    {'sn': 'device_id_16', 'phases': [(0, 70, 10.0, 2.0), (70, 90, 35.0, 5.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'drift_range': (70, 90)},
-    {'sn': 'device_id_17', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.30, 'gaps': [], 'sick': None},
-    {'sn': 'device_id_18', 'phases': [(0, 60, 10.0, 2.0), (60, 180, 13.0, 2.0)], 'tc': 0.15, 'gaps': [], 'sick': None, 'temp_shift': (60, 5.0)},
-    {'sn': 'device_id_19', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(80, 90, 'unworn')], 'sick': None},
-    {'sn': 'device_id_20', 'phases': [(0, 180, 14.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
-    {'sn': 'device_id_21', 'phases': [(0, 180, 15.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'warmup': 7},
-    {'sn': 'device_id_22', 'phases': [(0, 180, 5.0, 1.0)],  'tc': 0.05, 'gaps': [], 'sick': None},
-    {'sn': 'device_id_23', 'phases': [(0, 180, 20.0, 3.0)], 'tc': 0.12, 'gaps': [], 'sick': None},
-    {'sn': 'device_id_24', 'phases': [(0, 180, 4.0, 1.0)],  'tc': 0.08, 'gaps': [], 'sick': None},
+    {'device_id': 1001, 'sn': 'SIM-D001', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'device_id': 1002, 'sn': 'SIM-D002', 'phases': [(0, 60, 10.0, 2.0), (60, 80, 30.0, 4.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 80)},
+    {'device_id': 1003, 'sn': 'SIM-D003', 'phases': [(0, 60, 10.0, 2.0), (60, 180, 28.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': (60, 180)},
+    {'device_id': 1004, 'sn': 'SIM-D004', 'phases': [(0, 40, 10.0, 2.0), (40, 55, 28.0, 4.0), (55, 120, 10.0, 2.0), (120, 135, 30.0, 4.0), (135, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'sick_episodes': [(40, 55), (120, 135)]},
+    {'device_id': 1005, 'sn': 'SIM-D005', 'phases': [(0, 60, 10.0, 2.0), (60, 120, 15.0, 2.0), (120, 180, 22.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'device_id': 1006, 'sn': 'SIM-D006', 'phases': [(0, 90, 10.0, 2.0), (90, 180, 25.0, 3.0)], 'tc': 0.10, 'gaps': [], 'sick': (90, 180)},
+    {'device_id': 1007, 'sn': 'SIM-D007', 'phases': [(0, 50, 10.0, 2.0), (50, 80, 45.0, 6.0), (80, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': (50, 80)},
+    {'device_id': 1008, 'sn': 'SIM-D008', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.35, 'gaps': [], 'sick': None},
+    {'device_id': 1009, 'sn': 'SIM-D009', 'phases': [(0, 30, 10.0, 2.0), (30, 90, 3.0, 1.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'device_id': 1010, 'sn': 'SIM-D010', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(35, 38, 'unworn')], 'sick': None},
+    {'device_id': 1011, 'sn': 'SIM-D011', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(40, 45, 'battery')], 'sick': None},
+    {'device_id': 1012, 'sn': 'SIM-D012', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(30, 65, 'battery')], 'sick': None},
+    {'device_id': 1013, 'sn': 'SIM-D013', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(d, d + 1, 'signal') for d in sorted(_signal_gap_days)], 'sick': None},
+    {'device_id': 1014, 'sn': 'SIM-D014', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(50, 58, 'loose')], 'sick': None},
+    {'device_id': 1015, 'sn': 'SIM-D015', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(88, 92, 'battery')], 'sick': None},
+    {'device_id': 1016, 'sn': 'SIM-D016', 'phases': [(0, 70, 10.0, 2.0), (70, 90, 35.0, 5.0), (90, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'drift_range': (70, 90)},
+    {'device_id': 1017, 'sn': 'SIM-D017', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.30, 'gaps': [], 'sick': None},
+    {'device_id': 1018, 'sn': 'SIM-D018', 'phases': [(0, 60, 10.0, 2.0), (60, 180, 13.0, 2.0)], 'tc': 0.15, 'gaps': [], 'sick': None, 'temp_shift': (60, 5.0)},
+    {'device_id': 1019, 'sn': 'SIM-D019', 'phases': [(0, 180, 10.0, 2.0)], 'tc': 0.10, 'gaps': [(80, 90, 'unworn')], 'sick': None},
+    {'device_id': 1020, 'sn': 'SIM-D020', 'phases': [(0, 180, 14.0, 2.0)], 'tc': 0.10, 'gaps': [], 'sick': None},
+    {'device_id': 1021, 'sn': 'SIM-D021', 'phases': [(0, 180, 15.0, 4.0)], 'tc': 0.10, 'gaps': [], 'sick': None, 'warmup': 7},
+    {'device_id': 1022, 'sn': 'SIM-D022', 'phases': [(0, 180, 5.0, 1.0)],  'tc': 0.05, 'gaps': [], 'sick': None},
+    {'device_id': 1023, 'sn': 'SIM-D023', 'phases': [(0, 180, 20.0, 3.0)], 'tc': 0.12, 'gaps': [], 'sick': None},
+    {'device_id': 1024, 'sn': 'SIM-D024', 'phases': [(0, 180, 4.0, 1.0)],  'tc': 0.08, 'gaps': [], 'sick': None},
 ]
 
 
@@ -98,8 +118,14 @@ def to_ts(d: date) -> int:
     return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp() * 1000)
 
 
-def tbl(sn: str) -> str:
-    return f"`{BEH_SCHEMA}`.`{sn.lower()}`"
+def ms_to_local_str(ts_ms: int, user_timezone: str = 'UTC') -> str:
+    """Convert ms timestamp to local time string (YYYY-MM-DD HH:MM:SS) in UTC."""
+    dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+    return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def tbl(device_id: int) -> str:
+    return f"`{BEH_SCHEMA}`.`d_{device_id}`"
 
 
 def is_sick_day(day_idx: int, sc: dict) -> bool:
@@ -167,7 +193,9 @@ def gen_day_events(day_idx: int, n_scratch: int, is_sick: bool) -> list:
                 e_ts    = s_ts + dur_ms
                 dur_sec = dur_ms / 1000.0
                 conf    = gen_confidence(BEHAVIOR_SCRATCH, mixed)
-                rows.append((s_ts, e_ts, BEHAVIOR_SCRATCH, round(dur_sec, 2), conf))
+                local_start = ms_to_local_str(s_ts)
+                local_end   = ms_to_local_str(e_ts)
+                rows.append((s_ts, e_ts, BEHAVIOR_SCRATCH, round(dur_sec, 2), conf, local_start, local_end, 'UTC'))
                 cursor  = scratch_times[sc_idx] + dur_ms // 1000 + 1
                 sc_idx += 1
             else:
@@ -181,7 +209,9 @@ def gen_day_events(day_idx: int, n_scratch: int, is_sick: bool) -> list:
                 s_ts = day_ts + cursor * 1000
                 e_ts = s_ts + dur_sec * 1000
                 conf = gen_confidence(btype, mixed)
-                rows.append((s_ts, e_ts, btype, float(dur_sec), conf))
+                local_start = ms_to_local_str(s_ts)
+                local_end   = ms_to_local_str(e_ts)
+                rows.append((s_ts, e_ts, btype, float(dur_sec), conf, local_start, local_end, 'UTC'))
                 cursor += dur_sec
 
     return rows
@@ -208,17 +238,20 @@ def build_scenario_rows(sc: dict, seed: int = 42) -> list:
 #  数据库操作
 # ══════════════════════════════════════════════════════
 
-def get_conn():
-    return pymysql.connect(
+def get_conn(database=None):
+    kwargs = dict(
         host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
-        password=MYSQL_PASSWORD, database=MYSQL_DB,
+        password=MYSQL_PASSWORD,
         cursorclass=pymysql.cursors.DictCursor,
         charset="utf8mb4",
     )
+    if database:
+        kwargs['database'] = database
+    return pymysql.connect(**kwargs)
 
 
 def create_schema():
-    conn   = get_conn()
+    conn   = get_conn(database=None)
     cursor = conn.cursor()
     cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{BEH_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
     conn.commit()
@@ -227,41 +260,38 @@ def create_schema():
     print(f"[OK] 模式 {BEH_SCHEMA} 已就绪")
 
 
-def create_table(conn, sn: str):
-    t = tbl(sn)
+def create_table(conn, device_id: int):
+    t = tbl(device_id)
     cursor = conn.cursor()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {t} (
-          id           BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+          id           BIGINT        NOT NULL AUTO_INCREMENT PRIMARY KEY,
           ts_start     BIGINT        NOT NULL,
           ts_end       BIGINT        NOT NULL,
-          behavior     TINYINT       NOT NULL,
+          behavior     SMALLINT      NOT NULL,
           duration_sec DECIMAL(10,2) NOT NULL,
-          confidence   DECIMAL(5,3)  NOT NULL
+          confidence   DECIMAL(5,3)  NOT NULL,
+          local_start  VARCHAR(24)   DEFAULT NULL,
+          local_end    VARCHAR(24)   DEFAULT NULL,
+          user_timezone VARCHAR(32)  DEFAULT NULL,
+          UNIQUE KEY uq_ts_start (ts_start)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
-    try:
-        cursor.execute(f"CREATE INDEX {sn}_idx_ts ON {t} (ts_start)")
-    except Exception:
-        pass
-    try:
-        cursor.execute(f"CREATE INDEX {sn}_idx_beh ON {t} (behavior, ts_start)")
-    except Exception:
-        pass
     conn.commit()
     cursor.close()
     print(f"  [OK] 表 {t} 已就绪")
 
 
-def insert_rows(conn, sn: str, rows: list):
+def insert_rows(conn, device_id: int, rows: list):
     if not rows:
-        print(f"  [{sn}] 无数据，跳过")
+        print(f"  [device_id={device_id}] 无数据，跳过")
         return
 
-    t   = tbl(sn)
+    t   = tbl(device_id)
     sql = f"""
-        INSERT IGNORE INTO {t} (ts_start, ts_end, behavior, duration_sec, confidence)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT IGNORE INTO {t}
+          (ts_start, ts_end, behavior, duration_sec, confidence, local_start, local_end, user_timezone)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
     cursor     = conn.cursor()
     batch_size = 1000
@@ -271,7 +301,7 @@ def insert_rows(conn, sn: str, rows: list):
         conn.commit()
         total += cursor.rowcount
     cursor.close()
-    print(f"  [{sn}] 插入 {total} 条行为事件记录")
+    print(f"  [device_id={device_id}] 插入 {total} 条行为事件记录")
 
 
 # ══════════════════════════════════════════════════════
@@ -279,12 +309,12 @@ def insert_rows(conn, sn: str, rows: list):
 # ══════════════════════════════════════════════════════
 
 def query_summary():
-    conn   = get_conn()
+    conn   = get_conn(database=BEH_SCHEMA)
     cursor = conn.cursor()
 
     print("\n======= 行为数据概况 =======")
     for sc in SCENARIOS:
-        t = tbl(sc['sn'])
+        t = tbl(sc['device_id'])
         try:
             cursor.execute(f"""
                 SELECT
@@ -298,11 +328,11 @@ def query_summary():
                 FROM {t}
             """)
             row = cursor.fetchone()
-            print(f"  {sc['sn']:20s}  总={int(row['total']):6d}  "
+            print(f"  {sc['sn']:12s} (id={sc['device_id']})  总={int(row['total']):6d}  "
                   f"运动={row['move_cnt']}  睡眠={row['sleep_cnt']}  抓挠={row['scratch_cnt']}  "
                   f"均置信={row['avg_conf']}  {row['earliest']} ~ {row['latest']}")
         except Exception as e:
-            print(f"  {sc['sn']}: 查询失败 {e}")
+            print(f"  device_id={sc['device_id']}: 查询失败 {e}")
 
     cursor.close()
     conn.close()
@@ -316,17 +346,17 @@ def main():
     print("=== 第一步：创建模式 ===")
     create_schema()
 
-    conn = get_conn()
+    conn = get_conn(database=BEH_SCHEMA)
 
     print("\n=== 第二步：建表 ===")
     for sc in SCENARIOS:
-        create_table(conn, sc['sn'])
+        create_table(conn, sc['device_id'])
 
     print("\n=== 第三步：生成并插入数据 ===")
     for idx, sc in enumerate(SCENARIOS):
         rows = build_scenario_rows(sc, seed=42 + idx)
         print(f"  [{sc['sn']}] 生成 {len(rows)} 条事件，开始插入...")
-        insert_rows(conn, sc['sn'], rows)
+        insert_rows(conn, sc['device_id'], rows)
 
     conn.close()
 
