@@ -359,7 +359,8 @@ def mysql_init():
     cur  = conn.cursor()
 
     # 确保各数据库存在
-    for db in ("pet_dog_environment", "pet_dog_behavior", "pet_dog_skin_assessment"):
+    for db in ("pet_dog_environment", "pet_dog_behavior", "pet_dog_skin_assessment",
+               "pet_dog_scratch_baseline", "pet_dog_wear_event", "pet_dog_daily_summary"):
         cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
 
     # pet_dog_environment.d_72
@@ -502,10 +503,28 @@ def mysql_init():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项圈佩戴状态事件'
     """)
 
+    # pet_dog_scratch_baseline.pet_skin_baseline
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS `pet_dog_scratch_baseline`.`pet_skin_baseline` (
+          `device_id`       BIGINT        NOT NULL,
+          `baseline_mean`   DECIMAL(6,2)  NOT NULL DEFAULT 0,
+          `baseline_std`    DECIMAL(6,2)  NOT NULL DEFAULT 0,
+          `temp_coef`       DECIMAL(5,3)  NOT NULL DEFAULT 0,
+          `valid_days`      INT           NOT NULL DEFAULT 0,
+          `eval_phase`      SMALLINT      NOT NULL DEFAULT 0,
+          `confidence`      DECIMAL(4,2)  NOT NULL DEFAULT 0,
+          `wpeb_mean`       DECIMAL(10,4) DEFAULT NULL,
+          `wpeb_std`        DECIMAL(10,4) DEFAULT NULL,
+          `last_updated_ts` BIGINT        DEFAULT NULL,
+          `created_at`      BIGINT        NOT NULL,
+          PRIMARY KEY (`device_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+    """)
+
     conn.commit()
     cur.close()
     conn.close()
-    print("  [MySQL] 五张表已就绪 (behavior/env/assessment/wear_event/daily_summary)")
+    print("  [MySQL] 六张表已就绪 (behavior/env/assessment/wear_event/daily_summary/baseline)")
 
 
 def mysql_insert_env(rows_by_day: list):
