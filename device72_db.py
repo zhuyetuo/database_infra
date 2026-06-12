@@ -64,14 +64,23 @@ DEVICE_TZ  = "America/New_York"
 PHASES = [
     (0,   60,  10.0, 2.0),   # 正常期
     (60,  90,  35.0, 5.0),   # 炎症期
-    (90,  180, 10.0, 2.0),   # 恢复期
+    (90,  181, 10.0, 2.0),   # 恢复期
 ]
 SICK_RANGE = (60, 90)        # 炎症天区间
+
+# ── 松动事件场景（按天区间随机出现）─────────────────
+# (day_start, day_end, 每天松动次数均值, 每次平均时长分钟)
+LOOSE_PHASES = [
+    (10,  15,  1, 8),    # 轻微松动期（适应期）
+    (45,  50,  2, 15),   # 中度松动
+    (75,  85,  3, 20),   # 炎症期同步松动加剧（狗抓挠导致）
+    (140, 145, 1, 10),   # 偶发松动
+]
 TC         = 0.10            # 温度系数
 
 # ── 时间设置 ─────────────────────────────────────────
-DAYS       = 180
-START_DATE = date(2024, 1, 1)
+DAYS       = 181               # 2025-12-13 → 2026-06-11
+START_DATE = date(2025, 12, 13)
 
 # ── 采样率 ───────────────────────────────────────────
 IMU_HZ               = int(os.environ.get("IMU_SAMPLE_HZ",        "50"))
@@ -169,6 +178,33 @@ _temperature = (22 + 13 * np.sin(np.linspace(-np.pi / 2, 3 * np.pi / 2, DAYS))
 _humidity    = (65 + 15 * np.sin(np.linspace(-np.pi / 2, 3 * np.pi / 2, DAYS))
                 + np.random.normal(0, 3.0, DAYS))
 np.random.seed(42)
+
+# ── 松动场景预计算（每天: list of (sec_start, sec_end, state)）────
+def _build_loose_schedule(seed: int = 99) -> dict:
+    """返回 {day_idx: [(sec_start, sec_end, wear_state), ...]}，state: 0正常 1松动"""
+    rng = np.random.RandomState(seed)
+    schedule = {}
+    for day_s, day_e, n_mean, dur_mean in LOOSE_PHASES:
+        for day in range(day_s, day_e):
+            n_events = max(0, int(rng.normal(n_mean, 0.5)))
+            events = []
+            for _ in range(n_events):
+                t_start = int(rng.uniform(6 * 3600, 22 * 3600))
+                dur_sec = max(60, int(rng.normal(dur_mean * 60, dur_mean * 15)))
+                t_end   = min(t_start + dur_sec, 86399)
+                events.append((t_start, t_end))
+            # 合并重叠区间
+            events.sort()
+            merged = []
+            for s, e in events:
+                if merged and s <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+                else:
+                    merged.append([s, e])
+            schedule[day] = merged
+    return schedule
+
+_LOOSE_SCHEDULE = _build_loose_schedule()
 
 # ══════════════════════════════════════════════════════
 #  IMU 生成
@@ -399,10 +435,29 @@ def mysql_init():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
 
+    # pet_dog_wear_event.d_72
+    cur.execute("CREATE DATABASE IF NOT EXISTS `pet_dog_wear_event` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS `pet_dog_wear_event`.`d_72` (
+          `id`            BIGINT        NOT NULL AUTO_INCREMENT,
+          `ts_start`      BIGINT        NOT NULL COMMENT '事件开始 ms',
+          `ts_end`        BIGINT        NOT NULL COMMENT '事件结束 ms',
+          `wear_state`    TINYINT       NOT NULL COMMENT '0=正常 1=松动 2=脱落',
+          `duration_sec`  INT           NOT NULL,
+          `confidence`    DECIMAL(5,3)  DEFAULT NULL,
+          `local_start`   VARCHAR(24)   DEFAULT NULL,
+          `user_timezone` VARCHAR(32)   DEFAULT NULL,
+          `created_at`    BIGINT        NOT NULL,
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uq_ts_start` (`ts_start`),
+          KEY `idx_state` (`wear_state`, `ts_start`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项圈佩戴状态事件'
+    """)
+
     conn.commit()
     cur.close()
     conn.close()
-    print("  [MySQL] 三张表已就绪 (d_72)")
+    print("  [MySQL] 四张表已就绪 (d_72 + pet_dog_wear_event)")
 
 
 def mysql_insert_env(rows_by_day: list):
@@ -486,6 +541,54 @@ def mysql_insert_daily_assessment(day_rows: list):
     """, data)
     conn.commit()
     print(f"  [MySQL assessment] 插入 {cur.rowcount} 天评估")
+    cur.close()
+    conn.close()
+
+
+def gen_wear_events(day_idx: int, rng: np.random.RandomState) -> list:
+    """返回当天完整的佩戴状态事件列表 (ts_start, ts_end, wear_state, duration_sec, confidence)
+    覆盖全天 00:00~24:00，首尾相接，无缝衔接。
+    """
+    d      = START_DATE + timedelta(days=day_idx)
+    day_ts = to_ts(d)
+    ld     = d.strftime('%Y-%m-%d %H:%M:%S')
+
+    loose_windows = _LOOSE_SCHEDULE.get(day_idx, [])
+    # 把松动窗口转为事件列表，正常段填充间隙
+    events = []
+    cursor = 0  # 秒
+    for s, e in loose_windows:
+        if cursor < s:
+            events.append((cursor, s, 0))      # 正常
+        events.append((s, e, 1))               # 松动
+        cursor = e
+    if cursor < 86400:
+        events.append((cursor, 86400, 0))      # 结尾正常段
+
+    rows = []
+    for s, e, state in events:
+        dur     = e - s
+        ts_s    = day_ts + s * 1000
+        ts_e    = day_ts + e * 1000
+        conf    = round(0.85 + rng.random() * 0.12, 3) if state == 0 else round(0.70 + rng.random() * 0.20, 3)
+        fmt_s   = (d + timedelta(seconds=s)).strftime('%Y-%m-%d %H:%M:%S') if s < 86400 else ld
+        rows.append((ts_s, ts_e, state, dur, conf, fmt_s))
+    return rows
+
+
+def mysql_insert_wear_events(rows: list):
+    if not rows:
+        return
+    conn = mysql_conn()
+    cur  = conn.cursor()
+    now  = now_ms()
+    data = [(r[0], r[1], r[2], r[3], r[4], r[5], DEVICE_TZ, now) for r in rows]
+    cur.executemany("""
+        INSERT IGNORE INTO `pet_dog_wear_event`.`d_72`
+          (ts_start, ts_end, wear_state, duration_sec, confidence, local_start, user_timezone, created_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """, data)
+    conn.commit()
     cur.close()
     conn.close()
 
@@ -670,8 +773,15 @@ def main():
             seg_ts   = ts_end
         mysql_insert_behavior(seg_rows)
 
+        # ── MySQL: 佩戴状态事件 ──────────────────────
+        wear_rows   = gen_wear_events(day_idx, rng)
+        mysql_insert_wear_events(wear_rows)
+        loose_min   = round(sum(r[3] for r in wear_rows if r[2] == 1) / 60.0, 1)
+
         # ── MySQL: 每日评估 ───────────────────────────
         assess = compute_daily_assessment(day_idx, n_sc, temp, zscore_history, valid_days)
+        assess['worn_loose_minutes'] = loose_min
+        assess['wear_minutes']       = 1440 - int(loose_min)
         zscore_history.append(assess['zscore'])
         scratch_counts.append(n_sc)
         if not (day_idx < 14):
@@ -680,9 +790,8 @@ def main():
 
         elapsed = time.time() - t0
         eta     = elapsed / (day_idx + 1) * (DAYS - day_idx - 1)
-        print(f"  day {day_idx+1:3d}/{DAYS}  scratch={n_sc:3d}  "
-              f"zscore={assess['zscore']}  "
-              f"elapsed={elapsed:.0f}s  ETA={eta:.0f}s", flush=True)
+        print(f"  day {day_idx+1:3d}/{DAYS}  scratch={n_sc:3d}  loose={loose_min}min  "
+              f"zscore={assess['zscore']}  elapsed={elapsed:.0f}s  ETA={eta:.0f}s", flush=True)
 
     # 批量写评估
     print("\n[3] 写入每日评估...")
