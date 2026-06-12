@@ -64,14 +64,23 @@ DEVICE_TZ  = "America/New_York"
 PHASES = [
     (0,   60,  10.0, 2.0),   # 正常期
     (60,  90,  35.0, 5.0),   # 炎症期
-    (90,  180, 10.0, 2.0),   # 恢复期
+    (90,  181, 10.0, 2.0),   # 恢复期
 ]
 SICK_RANGE = (60, 90)        # 炎症天区间
+
+# ── 松动事件场景（按天区间随机出现）─────────────────
+# (day_start, day_end, 每天松动次数均值, 每次平均时长分钟)
+LOOSE_PHASES = [
+    (10,  15,  1, 8),    # 轻微松动期（适应期）
+    (45,  50,  2, 15),   # 中度松动
+    (75,  85,  3, 20),   # 炎症期同步松动加剧（狗抓挠导致）
+    (140, 145, 1, 10),   # 偶发松动
+]
 TC         = 0.10            # 温度系数
 
 # ── 时间设置 ─────────────────────────────────────────
-DAYS       = 180
-START_DATE = date(2024, 1, 1)
+DAYS       = 181               # 2025-12-13 → 2026-06-11
+START_DATE = date(2025, 12, 13)
 
 # ── 采样率 ───────────────────────────────────────────
 IMU_HZ               = int(os.environ.get("IMU_SAMPLE_HZ",        "50"))
@@ -169,6 +178,33 @@ _temperature = (22 + 13 * np.sin(np.linspace(-np.pi / 2, 3 * np.pi / 2, DAYS))
 _humidity    = (65 + 15 * np.sin(np.linspace(-np.pi / 2, 3 * np.pi / 2, DAYS))
                 + np.random.normal(0, 3.0, DAYS))
 np.random.seed(42)
+
+# ── 松动场景预计算（每天: list of (sec_start, sec_end, state)）────
+def _build_loose_schedule(seed: int = 99) -> dict:
+    """返回 {day_idx: [(sec_start, sec_end, wear_state), ...]}，state: 0正常 1松动"""
+    rng = np.random.RandomState(seed)
+    schedule = {}
+    for day_s, day_e, n_mean, dur_mean in LOOSE_PHASES:
+        for day in range(day_s, day_e):
+            n_events = max(0, int(rng.normal(n_mean, 0.5)))
+            events = []
+            for _ in range(n_events):
+                t_start = int(rng.uniform(6 * 3600, 22 * 3600))
+                dur_sec = max(60, int(rng.normal(dur_mean * 60, dur_mean * 15)))
+                t_end   = min(t_start + dur_sec, 86399)
+                events.append((t_start, t_end))
+            # 合并重叠区间
+            events.sort()
+            merged = []
+            for s, e in events:
+                if merged and s <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+                else:
+                    merged.append([s, e])
+            schedule[day] = merged
+    return schedule
+
+_LOOSE_SCHEDULE = _build_loose_schedule()
 
 # ══════════════════════════════════════════════════════
 #  IMU 生成
@@ -399,10 +435,59 @@ def mysql_init():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
 
+    # pet_dog_daily_summary.d_72
+    cur.execute("CREATE DATABASE IF NOT EXISTS `pet_dog_daily_summary` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS `pet_dog_daily_summary`.`d_72` (
+          `stat_date_ts`        BIGINT       NOT NULL COMMENT '当天UTC零点 ms',
+          `local_date`          VARCHAR(12)  DEFAULT NULL,
+          `user_timezone`       VARCHAR(32)  DEFAULT NULL,
+
+          `sleep_min`           INT          NOT NULL DEFAULT 0 COMMENT '睡眠分钟',
+          `move_min`            INT          NOT NULL DEFAULT 0 COMMENT '运动分钟',
+          `scratch_min`         INT          NOT NULL DEFAULT 0 COMMENT '抓挠分钟',
+
+          `scratch_count`       INT          NOT NULL DEFAULT 0 COMMENT '抓挠次数',
+          `scratch_avg_sec`     INT          NOT NULL DEFAULT 0 COMMENT '平均每次秒',
+          `scratch_max_sec`     INT          NOT NULL DEFAULT 0 COMMENT '最长一次秒',
+          `night_scratch_count` INT          NOT NULL DEFAULT 0 COMMENT '夜间(22~06)抓挠次数',
+
+          `wear_min`            INT          NOT NULL DEFAULT 0 COMMENT '正常佩戴分钟',
+          `loose_min`           DECIMAL(8,1) NOT NULL DEFAULT 0 COMMENT '松动分钟',
+          `off_min`             INT          NOT NULL DEFAULT 0 COMMENT '脱落/未佩戴分钟',
+
+          `sleep_ratio`         DECIMAL(4,3) DEFAULT NULL COMMENT '睡眠/佩戴',
+          `active_ratio`        DECIMAL(4,3) DEFAULT NULL COMMENT '运动/佩戴',
+
+          `created_at`          BIGINT       NOT NULL,
+          `updated_at`          BIGINT       NOT NULL,
+          PRIMARY KEY (`stat_date_ts`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日行为汇总'
+    """)
+
+    # pet_dog_wear_event.d_72
+    cur.execute("CREATE DATABASE IF NOT EXISTS `pet_dog_wear_event` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS `pet_dog_wear_event`.`d_72` (
+          `id`            BIGINT        NOT NULL AUTO_INCREMENT,
+          `ts_start`      BIGINT        NOT NULL COMMENT '事件开始 ms',
+          `ts_end`        BIGINT        NOT NULL COMMENT '事件结束 ms',
+          `wear_state`    TINYINT       NOT NULL COMMENT '0=正常 1=松动 2=脱落',
+          `duration_sec`  INT           NOT NULL,
+          `confidence`    DECIMAL(5,3)  DEFAULT NULL,
+          `local_start`   VARCHAR(24)   DEFAULT NULL,
+          `user_timezone` VARCHAR(32)   DEFAULT NULL,
+          `created_at`    BIGINT        NOT NULL,
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uq_ts_start` (`ts_start`),
+          KEY `idx_state` (`wear_state`, `ts_start`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项圈佩戴状态事件'
+    """)
+
     conn.commit()
     cur.close()
     conn.close()
-    print("  [MySQL] 三张表已就绪 (d_72)")
+    print("  [MySQL] 五张表已就绪 (behavior/env/assessment/wear_event/daily_summary)")
 
 
 def mysql_insert_env(rows_by_day: list):
@@ -486,6 +571,87 @@ def mysql_insert_daily_assessment(day_rows: list):
     """, data)
     conn.commit()
     print(f"  [MySQL assessment] 插入 {cur.rowcount} 天评估")
+    cur.close()
+    conn.close()
+
+
+def gen_wear_events(day_idx: int, rng: np.random.RandomState) -> list:
+    """返回当天完整的佩戴状态事件列表 (ts_start, ts_end, wear_state, duration_sec, confidence)
+    覆盖全天 00:00~24:00，首尾相接，无缝衔接。
+    """
+    d      = START_DATE + timedelta(days=day_idx)
+    day_ts = to_ts(d)
+    ld     = d.strftime('%Y-%m-%d %H:%M:%S')
+
+    loose_windows = _LOOSE_SCHEDULE.get(day_idx, [])
+    # 把松动窗口转为事件列表，正常段填充间隙
+    events = []
+    cursor = 0  # 秒
+    for s, e in loose_windows:
+        if cursor < s:
+            events.append((cursor, s, 0))      # 正常
+        events.append((s, e, 1))               # 松动
+        cursor = e
+    if cursor < 86400:
+        events.append((cursor, 86400, 0))      # 结尾正常段
+
+    rows = []
+    for s, e, state in events:
+        dur     = e - s
+        ts_s    = day_ts + s * 1000
+        ts_e    = day_ts + e * 1000
+        conf    = round(0.85 + rng.random() * 0.12, 3) if state == 0 else round(0.70 + rng.random() * 0.20, 3)
+        fmt_s   = (d + timedelta(seconds=s)).strftime('%Y-%m-%d %H:%M:%S') if s < 86400 else ld
+        rows.append((ts_s, ts_e, state, dur, conf, fmt_s))
+    return rows
+
+
+def mysql_insert_wear_events(rows: list):
+    if not rows:
+        return
+    conn = mysql_conn()
+    cur  = conn.cursor()
+    now  = now_ms()
+    data = [(r[0], r[1], r[2], r[3], r[4], r[5], DEVICE_TZ, now) for r in rows]
+    cur.executemany("""
+        INSERT IGNORE INTO `pet_dog_wear_event`.`d_72`
+          (ts_start, ts_end, wear_state, duration_sec, confidence, local_start, user_timezone, created_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """, data)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def mysql_insert_daily_summary(row: dict):
+    conn = mysql_conn()
+    cur  = conn.cursor()
+    now  = now_ms()
+    wear = row['wear_min']
+    cur.execute("""
+        INSERT INTO `pet_dog_daily_summary`.`d_72`
+          (stat_date_ts, local_date, user_timezone,
+           sleep_min, move_min, scratch_min,
+           scratch_count, scratch_avg_sec, scratch_max_sec, night_scratch_count,
+           wear_min, loose_min, off_min,
+           sleep_ratio, active_ratio,
+           created_at, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE
+          sleep_min=VALUES(sleep_min), move_min=VALUES(move_min),
+          scratch_min=VALUES(scratch_min), scratch_count=VALUES(scratch_count),
+          loose_min=VALUES(loose_min), updated_at=VALUES(updated_at)
+    """, (
+        row['stat_date_ts'], row['local_date'], DEVICE_TZ,
+        row['sleep_min'], row['move_min'], row['scratch_min'],
+        row['scratch_count'], row['scratch_avg_sec'], row['scratch_max_sec'],
+        row['night_scratch_count'],
+        wear, row['loose_min'], row['off_min'],
+        round(row['sleep_min'] / wear, 3) if wear > 0 else None,
+        round(row['move_min']  / wear, 3) if wear > 0 else None,
+        now, now,
+    ))
+    conn.commit()
     cur.close()
     conn.close()
 
@@ -659,19 +825,58 @@ def main():
         cur.close()
         conn.close()
 
-        # ── MySQL: behavior 片段 ──────────────────────
+        # ── MySQL: behavior 片段 + daily_summary 汇总 ─
         seg_ts = day_ts
         seg_rows = []
+        sleep_sec = move_sec = scratch_sec = 0
+        scratch_segs = []   # 用于计算 avg/max/night
         for _, n_samp, btype, si in _iter_segments(day_idx, n_sc, sick, rng):
             dur_sec  = n_samp / IMU_HZ
             ts_end   = seg_ts + int(dur_sec * 1000)
             conf     = round(0.5 + rng.random() * 0.5, 3)
             seg_rows.append((seg_ts, ts_end, btype, dur_sec, conf))
-            seg_ts   = ts_end
+            if btype == BEHAVIOR_SLEEP:
+                sleep_sec += dur_sec
+            elif btype == BEHAVIOR_MOVE:
+                move_sec += dur_sec
+            elif btype == BEHAVIOR_SCRATCH:
+                scratch_sec += dur_sec
+                scratch_segs.append((seg_ts, dur_sec))
+            seg_ts = ts_end
         mysql_insert_behavior(seg_rows)
+
+        # 夜间抓挠：22:00~次日06:00
+        night_start = day_ts + 22 * 3600 * 1000
+        night_end   = day_ts + 30 * 3600 * 1000  # +30h = 次日06:00
+        night_sc_cnt = sum(1 for ts, _ in scratch_segs
+                           if ts >= night_start or ts < day_ts + 6 * 3600 * 1000)
+        avg_sc_sec = int(scratch_sec / len(scratch_segs)) if scratch_segs else 0
+        max_sc_sec = int(max((d for _, d in scratch_segs), default=0))
+
+        mysql_insert_daily_summary({
+            'stat_date_ts':       day_ts,
+            'local_date':         ld,
+            'sleep_min':          int(sleep_sec   / 60),
+            'move_min':           int(move_sec    / 60),
+            'scratch_min':        int(scratch_sec / 60),
+            'scratch_count':      len(scratch_segs),
+            'scratch_avg_sec':    avg_sc_sec,
+            'scratch_max_sec':    max_sc_sec,
+            'night_scratch_count': night_sc_cnt,
+            'wear_min':           1440 - int(loose_min),
+            'loose_min':          loose_min,
+            'off_min':            0,
+        })
+
+        # ── MySQL: 佩戴状态事件 ──────────────────────
+        wear_rows   = gen_wear_events(day_idx, rng)
+        mysql_insert_wear_events(wear_rows)
+        loose_min   = round(sum(r[3] for r in wear_rows if r[2] == 1) / 60.0, 1)
 
         # ── MySQL: 每日评估 ───────────────────────────
         assess = compute_daily_assessment(day_idx, n_sc, temp, zscore_history, valid_days)
+        assess['worn_loose_minutes'] = loose_min
+        assess['wear_minutes']       = 1440 - int(loose_min)
         zscore_history.append(assess['zscore'])
         scratch_counts.append(n_sc)
         if not (day_idx < 14):
@@ -680,9 +885,8 @@ def main():
 
         elapsed = time.time() - t0
         eta     = elapsed / (day_idx + 1) * (DAYS - day_idx - 1)
-        print(f"  day {day_idx+1:3d}/{DAYS}  scratch={n_sc:3d}  "
-              f"zscore={assess['zscore']}  "
-              f"elapsed={elapsed:.0f}s  ETA={eta:.0f}s", flush=True)
+        print(f"  day {day_idx+1:3d}/{DAYS}  scratch={n_sc:3d}  loose={loose_min}min  "
+              f"zscore={assess['zscore']}  elapsed={elapsed:.0f}s  ETA={eta:.0f}s", flush=True)
 
     # 批量写评估
     print("\n[3] 写入每日评估...")
