@@ -167,7 +167,7 @@ MYSQL_ROOT_PASSWORD = os.environ.get("MYSQL_ROOT_PASSWORD", "123456")
 def mysql_conn():
     return pymysql.connect(
         host=MYSQL_HOST, port=MYSQL_PORT, user=MYSQL_USER,
-        password=MYSQL_PASSWORD, database=MYSQL_DB,
+        password=MYSQL_PASSWORD, database=DB,
         cursorclass=pymysql.cursors.DictCursor,
         charset="utf8mb4",
     )

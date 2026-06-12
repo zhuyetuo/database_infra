@@ -134,19 +134,30 @@ def main():
     for t in TD_TABLES_TO_DROP:
         print(f"  - {t}")
 
-    ans = input("\n确认删除并重建？(yes/no): ").strip().lower()
+    ans = input("\n确认删除？(yes/no): ").strip().lower()
     if ans != "yes":
         print("已取消")
         sys.exit(0)
 
     drop_mysql_databases()
     drop_tdengine_tables()
-    run_scripts()
 
     print("\n" + "=" * 55)
-    print("  基础数据重建完成")
-    print("  请单独运行 device72_db.py 生成 device72 的 181 天数据")
+    print("  删除完成")
     print("=" * 55)
+
+    ans2 = input("\n是否立即重建基础数据（mysql_seed / behavior / environment / scratch_baseline / skin_assessment）？(yes/no): ").strip().lower()
+    if ans2 == "yes":
+        run_scripts()
+        print("\n" + "=" * 55)
+        print("  基础数据重建完成")
+        print("  请单独运行 device72_db.py 生成 device72 的 181 天数据")
+        print("=" * 55)
+    else:
+        print("\n跳过重建。可手动运行各脚本：")
+        for script, desc in SCRIPTS:
+            print(f"  python {script}   # {desc}")
+        print("  python device72_db.py   # device72 181天数据")
 
 if __name__ == "__main__":
     main()
