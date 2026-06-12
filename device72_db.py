@@ -459,11 +459,25 @@ def mysql_init():
           `sleep_ratio`         DECIMAL(4,3) DEFAULT NULL COMMENT '睡眠/佩戴',
           `active_ratio`        DECIMAL(4,3) DEFAULT NULL COMMENT '运动/佩戴',
 
+          `sleep_status`        TINYINT      NOT NULL DEFAULT 0 COMMENT '0=绿 1=黄 2=红',
+          `move_status`         TINYINT      NOT NULL DEFAULT 0 COMMENT '0=绿 1=黄 2=红',
+          `scratch_status`      TINYINT      NOT NULL DEFAULT 0 COMMENT '0=绿 1=黄 2=红',
+
           `created_at`          BIGINT       NOT NULL,
           `updated_at`          BIGINT       NOT NULL,
           PRIMARY KEY (`stat_date_ts`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日行为汇总'
     """)
+    # 已存在时补列（幂等）
+    for col, ddl in [
+        ("sleep_status",   "TINYINT NOT NULL DEFAULT 0 COMMENT '0=绿 1=黄 2=红'"),
+        ("move_status",    "TINYINT NOT NULL DEFAULT 0 COMMENT '0=绿 1=黄 2=红'"),
+        ("scratch_status", "TINYINT NOT NULL DEFAULT 0 COMMENT '0=绿 1=黄 2=红'"),
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE `pet_dog_daily_summary`.`d_72` ADD COLUMN `{col}` {ddl}")
+        except Exception:
+            pass  # 列已存在则忽略
 
     # pet_dog_wear_event.d_72
     cur.execute("CREATE DATABASE IF NOT EXISTS `pet_dog_wear_event` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
@@ -623,11 +637,46 @@ def mysql_insert_wear_events(rows: list):
     conn.close()
 
 
+# ── 阈值常量 ──────────────────────────────────────────
+_SLEEP_GREEN  = (480, 960)   # 8~16小时
+_SLEEP_YELLOW = (360, 1080)  # 6~18小时
+_MOVE_GREEN   = 60           # ≥60分钟
+_MOVE_YELLOW  = 30           # ≥30分钟
+
+
+def _sleep_status(sleep_min: int) -> int:
+    if _SLEEP_GREEN[0] <= sleep_min <= _SLEEP_GREEN[1]:
+        return 0  # 绿
+    if _SLEEP_YELLOW[0] <= sleep_min <= _SLEEP_YELLOW[1]:
+        return 1  # 黄
+    return 2      # 红
+
+
+def _move_status(move_min: int) -> int:
+    if move_min >= _MOVE_GREEN:
+        return 0
+    if move_min >= _MOVE_YELLOW:
+        return 1
+    return 2
+
+
+def _scratch_status(scratch_count: int, bsl_mean: float, bsl_std: float) -> int:
+    if bsl_std <= 0:
+        return 0
+    if scratch_count <= bsl_mean + bsl_std:
+        return 0  # 绿：≤ mean+1σ
+    if scratch_count <= bsl_mean + 2 * bsl_std:
+        return 1  # 黄：mean+1σ ~ mean+2σ
+    return 2      # 红：> mean+2σ
+
+
 def mysql_insert_daily_summary(row: dict):
     conn = mysql_conn()
     cur  = conn.cursor()
     now  = now_ms()
     wear = row['wear_min']
+    bsl_mean = row.get('bsl_mean', 10.0)
+    bsl_std  = row.get('bsl_std',  2.0)
     cur.execute("""
         INSERT INTO `pet_dog_daily_summary`.`d_72`
           (stat_date_ts, local_date, user_timezone,
@@ -635,12 +684,16 @@ def mysql_insert_daily_summary(row: dict):
            scratch_count, scratch_avg_sec, scratch_max_sec, night_scratch_count,
            wear_min, loose_min, off_min,
            sleep_ratio, active_ratio,
+           sleep_status, move_status, scratch_status,
            created_at, updated_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON DUPLICATE KEY UPDATE
           sleep_min=VALUES(sleep_min), move_min=VALUES(move_min),
           scratch_min=VALUES(scratch_min), scratch_count=VALUES(scratch_count),
-          loose_min=VALUES(loose_min), updated_at=VALUES(updated_at)
+          loose_min=VALUES(loose_min),
+          sleep_status=VALUES(sleep_status), move_status=VALUES(move_status),
+          scratch_status=VALUES(scratch_status),
+          updated_at=VALUES(updated_at)
     """, (
         row['stat_date_ts'], row['local_date'], DEVICE_TZ,
         row['sleep_min'], row['move_min'], row['scratch_min'],
@@ -649,6 +702,9 @@ def mysql_insert_daily_summary(row: dict):
         wear, row['loose_min'], row['off_min'],
         round(row['sleep_min'] / wear, 3) if wear > 0 else None,
         round(row['move_min']  / wear, 3) if wear > 0 else None,
+        _sleep_status(row['sleep_min']),
+        _move_status(row['move_min']),
+        _scratch_status(row['scratch_count'], bsl_mean, bsl_std),
         now, now,
     ))
     conn.commit()
@@ -857,6 +913,13 @@ def main():
         avg_sc_sec = int(scratch_sec / len(scratch_segs)) if scratch_segs else 0
         max_sc_sec = int(max((d for _, d in scratch_segs), default=0))
 
+        # 基线：前60天正常期均值（warmup期用默认值）
+        if len(scratch_counts) >= 14:
+            _bsl_mean = float(np.mean(scratch_counts[:60] if len(scratch_counts) >= 60 else scratch_counts))
+            _bsl_std  = float(np.std(scratch_counts[:60]  if len(scratch_counts) >= 60 else scratch_counts))
+        else:
+            _bsl_mean, _bsl_std = 10.0, 2.0
+
         mysql_insert_daily_summary({
             'stat_date_ts':        day_ts,
             'local_date':          ld,
@@ -870,6 +933,8 @@ def main():
             'wear_min':            1440 - int(loose_min),
             'loose_min':           loose_min,
             'off_min':             0,
+            'bsl_mean':            _bsl_mean,
+            'bsl_std':             _bsl_std,
         })
 
         # ── MySQL: 每日评估 ───────────────────────────
