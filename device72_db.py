@@ -845,33 +845,32 @@ def main():
             seg_ts = ts_end
         mysql_insert_behavior(seg_rows)
 
+        # ── MySQL: 佩戴状态事件（先算 loose_min）────
+        wear_rows = gen_wear_events(day_idx, rng)
+        mysql_insert_wear_events(wear_rows)
+        loose_min = round(sum(r[3] for r in wear_rows if r[2] == 1) / 60.0, 1)
+
         # 夜间抓挠：22:00~次日06:00
-        night_start = day_ts + 22 * 3600 * 1000
-        night_end   = day_ts + 30 * 3600 * 1000  # +30h = 次日06:00
         night_sc_cnt = sum(1 for ts, _ in scratch_segs
-                           if ts >= night_start or ts < day_ts + 6 * 3600 * 1000)
+                           if ts >= day_ts + 22 * 3600 * 1000
+                           or ts < day_ts + 6 * 3600 * 1000)
         avg_sc_sec = int(scratch_sec / len(scratch_segs)) if scratch_segs else 0
         max_sc_sec = int(max((d for _, d in scratch_segs), default=0))
 
         mysql_insert_daily_summary({
-            'stat_date_ts':       day_ts,
-            'local_date':         ld,
-            'sleep_min':          int(sleep_sec   / 60),
-            'move_min':           int(move_sec    / 60),
-            'scratch_min':        int(scratch_sec / 60),
-            'scratch_count':      len(scratch_segs),
-            'scratch_avg_sec':    avg_sc_sec,
-            'scratch_max_sec':    max_sc_sec,
+            'stat_date_ts':        day_ts,
+            'local_date':          ld,
+            'sleep_min':           int(sleep_sec   / 60),
+            'move_min':            int(move_sec    / 60),
+            'scratch_min':         int(scratch_sec / 60),
+            'scratch_count':       len(scratch_segs),
+            'scratch_avg_sec':     avg_sc_sec,
+            'scratch_max_sec':     max_sc_sec,
             'night_scratch_count': night_sc_cnt,
-            'wear_min':           1440 - int(loose_min),
-            'loose_min':          loose_min,
-            'off_min':            0,
+            'wear_min':            1440 - int(loose_min),
+            'loose_min':           loose_min,
+            'off_min':             0,
         })
-
-        # ── MySQL: 佩戴状态事件 ──────────────────────
-        wear_rows   = gen_wear_events(day_idx, rng)
-        mysql_insert_wear_events(wear_rows)
-        loose_min   = round(sum(r[3] for r in wear_rows if r[2] == 1) / 60.0, 1)
 
         # ── MySQL: 每日评估 ───────────────────────────
         assess = compute_daily_assessment(day_idx, n_sc, temp, zscore_history, valid_days)
