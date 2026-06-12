@@ -304,10 +304,23 @@ def init_db():
 #  数据写入
 # ══════════════════════════════════════════════════════
 
-IMU_CHUNK      = 16000
-ENV_CHUNK      = 2000
-NECK_CHUNK     = 1000
-PARALLEL_DEVS  = int(os.environ.get("PARALLEL_DEVS", "4"))  # 并行设备数
+IMU_CHUNK      = int(os.environ.get("IMU_CHUNK",   "100000"))  # 100k行≈5MB/请求
+ENV_CHUNK      = int(os.environ.get("ENV_CHUNK",   "5000"))
+NECK_CHUNK     = int(os.environ.get("NECK_CHUNK",  "2000"))
+PARALLEL_DEVS  = int(os.environ.get("PARALLEL_DEVS", "4"))
+HTTP_CONC      = int(os.environ.get("HTTP_CONC",   "8"))   # 每设备并发 HTTP 请求数
+
+_http_session = requests.Session()
+_http_session.auth = (TD_USER, TD_PASS)
+_TD_URL = f"http://{TD_HOST}:{TD_PORT}/rest/sql"
+
+
+def td_exec_fast(sql: str) -> None:
+    resp = _http_session.post(_TD_URL, data=sql.encode('utf-8'), timeout=120)
+    resp.raise_for_status()
+    r = resp.json()
+    if r.get('code', 0) != 0:
+        raise RuntimeError(f"TDengine error: {r.get('desc', r)}")
 
 
 def _imu_vals_str(ts_chunk: np.ndarray, imu_chunk: np.ndarray) -> str:
@@ -322,28 +335,45 @@ def _imu_vals_str(ts_chunk: np.ndarray, imu_chunk: np.ndarray) -> str:
     )
 
 
+def _send_chunks_concurrent(sqls: list) -> None:
+    """并发发送多个 INSERT SQL（同一设备内 HTTP 并发）"""
+    with ThreadPoolExecutor(max_workers=HTTP_CONC) as pool:
+        futs = [pool.submit(td_exec_fast, sql) for sql in sqls]
+        for f in futs:
+            f.result()
+
+
 def insert_imu(device_sn: str, ts_arr: np.ndarray, imu_arr: np.ndarray):
     suffix = sn_to_tbl(device_sn)
+    tbl_name = f"{TD_DB}.imu_{suffix}"
     n = len(ts_arr)
+    sqls = []
     for i in range(0, n, IMU_CHUNK):
         vals = _imu_vals_str(ts_arr[i:i + IMU_CHUNK], imu_arr[i:i + IMU_CHUNK])
-        td_exec(f"INSERT INTO {TD_DB}.imu_{suffix} VALUES {vals}")
+        sqls.append(f"INSERT INTO {tbl_name} VALUES {vals}")
+    _send_chunks_concurrent(sqls)
 
 
 def insert_env(device_sn: str, rows: list):
     suffix = sn_to_tbl(device_sn)
+    tbl_name = f"{TD_DB}.env_{suffix}"
+    sqls = []
     for i in range(0, len(rows), ENV_CHUNK):
         b    = rows[i: i + ENV_CHUNK]
         vals = " ".join(f"({r[0]},{r[1]},{r[2]})" for r in b)
-        td_exec(f"INSERT INTO {TD_DB}.env_{suffix} VALUES {vals}")
+        sqls.append(f"INSERT INTO {tbl_name} VALUES {vals}")
+    _send_chunks_concurrent(sqls)
 
 
 def insert_neck(device_sn: str, rows: list):
     suffix = sn_to_tbl(device_sn)
+    tbl_name = f"{TD_DB}.bodytemp_{suffix}"
+    sqls = []
     for i in range(0, len(rows), NECK_CHUNK):
         b    = rows[i: i + NECK_CHUNK]
         vals = " ".join(f"({r[0]},{r[1]})" for r in b)
-        td_exec(f"INSERT INTO {TD_DB}.bodytemp_{suffix} VALUES {vals}")
+        sqls.append(f"INSERT INTO {tbl_name} VALUES {vals}")
+    _send_chunks_concurrent(sqls)
 
 
 # ══════════════════════════════════════════════════════
