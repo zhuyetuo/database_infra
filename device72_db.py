@@ -358,6 +358,10 @@ def mysql_init():
     conn = mysql_conn()
     cur  = conn.cursor()
 
+    # 确保各数据库存在
+    for db in ("pet_dog_environment", "pet_dog_behavior", "pet_dog_skin_assessment"):
+        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
+
     # pet_dog_environment.d_72
     cur.execute("""
         CREATE TABLE IF NOT EXISTS `pet_dog_environment`.`d_72` (
