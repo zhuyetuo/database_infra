@@ -436,7 +436,7 @@ def mysql_init():
     """)
 
     # pet_dog_daily_summary.d_72
-    cur.execute("CREATE DATABASE IF NOT EXISTS `pet_dog_daily_summary` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+    cur.execute("CREATE DATABASE IF NOT EXISTS `pet_dog_daily_summary` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS `pet_dog_daily_summary`.`d_72` (
           `stat_date_ts`        BIGINT       NOT NULL COMMENT '当天UTC零点 ms',
@@ -480,7 +480,7 @@ def mysql_init():
             pass  # 列已存在则忽略
 
     # pet_dog_wear_event.d_72
-    cur.execute("CREATE DATABASE IF NOT EXISTS `pet_dog_wear_event` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+    cur.execute("CREATE DATABASE IF NOT EXISTS `pet_dog_wear_event` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS `pet_dog_wear_event`.`d_72` (
           `id`            BIGINT        NOT NULL AUTO_INCREMENT,

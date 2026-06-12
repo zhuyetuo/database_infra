@@ -109,7 +109,7 @@ BIND_START = datetime(2024, 1, 1, tzinfo=timezone.utc)
 #  DDL  (MySQL 语法)
 # ══════════════════════════════════════════════════════
 
-DDL_DATABASE = f"CREATE DATABASE IF NOT EXISTS `{DB}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+DDL_DATABASE = f"CREATE DATABASE IF NOT EXISTS `{DB}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
 
 DDL_USER = f"""
 CREATE TABLE IF NOT EXISTS `{DB}`.`user` (

@@ -209,7 +209,7 @@ def mysql_init():
     cur  = conn.cursor()
 
     for db in ["pet_dog_behavior", "pet_dog_skin_assessment", "pet_dog_scratch_baseline"]:
-        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
 
     for dev in DEVICES:
         device_id = dev["device_id"]

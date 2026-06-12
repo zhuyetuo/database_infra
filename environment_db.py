@@ -196,7 +196,7 @@ def get_conn(database=None):
 def create_schema():
     conn   = get_conn(database=None)
     cursor = conn.cursor()
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{ENV_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{ENV_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
     conn.commit()
     cursor.close()
     conn.close()

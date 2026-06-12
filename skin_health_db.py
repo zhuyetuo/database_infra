@@ -30,7 +30,7 @@ def create_table():
     conn   = get_conn()
     cursor = conn.cursor()
 
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_SCHEMA}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")
 
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS `{MYSQL_SCHEMA}`.`pet_skin_health_daily` (
